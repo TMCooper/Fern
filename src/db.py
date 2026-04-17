@@ -32,7 +32,8 @@ class Database:
                             message_author_id TEXT,
                             deleter_name TEXT,
                             deleter_id TEXT,
-                            image_hashes TEXT
+                            image_hashes TEXT,
+                            UNIQUE(id_server, message_content, image_hashes)
                         )
                     """) # Creation de la table contenant nos données si celle ci n'existe pas
 

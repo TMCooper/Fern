@@ -1,14 +1,18 @@
 from src.db import Database, Utils
-import discord, os, subprocess, json
+import discord, os, subprocess, json, asyncio
 from dotenv import load_dotenv
 from discord import app_commands
 from discord.ext import commands
+from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
 DEV_GUILD_ID = os.getenv('DEV_GUILD_ID')
 DEV_ID = int(os.getenv('DEV_ID'))
 Database.check_database()
+
+pending_deletes = {}
+IGNORED_IDS = [431544605209788416, 276060004262477825]
 
 # Configuration du bot
 intents = discord.Intents.all()
@@ -30,10 +34,22 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author == bot.user or message.webhook_id is not None:
         return
 
-    # Calcul du hash si il y a une ou plusieur images
+    # Si c'est un webhook qui reposte (Tupper), on nettoie le pending
+    if message.webhook_id and message.author.bot:
+        to_remove = [
+            mid for mid, msg in pending_deletes.items()
+            if msg.content and msg.content.split(".", 1)[-1].strip() == message.content
+        ]
+        for mid in to_remove:
+            del pending_deletes[mid]
+
+        await bot.process_commands(message)
+        return
+
+    # Calcul du hash si il y a une ou plusieurs images
     current_hash = None
     if message.attachments:
         attachment = message.attachments[0]
@@ -44,7 +60,6 @@ async def on_message(message):
     already_banned = Database.database_lookup(message.guild.id, message.content, current_hash)
 
     if already_banned:
-        # Action de ton choix : Alerter les modos, supprimer le message, etc.
         try:
             with open("config.json", "r") as f:
                 config = json.load(f)
@@ -54,7 +69,7 @@ async def on_message(message):
             if serv_id in config:
                 conf = config[serv_id]
                 target_channel = bot.get_channel(conf["channel_id"])
-                role_ping = f"<@&{conf['role_id']}>" # Format pour ping un rôle
+                role_ping = f"<@&{conf['role_id']}>"
 
                 if target_channel:
                     jump_link = message.jump_url
@@ -64,7 +79,6 @@ async def on_message(message):
                         f"**Salon :** {message.channel.mention}\n"
                         f"**Action :** [Cliquer ici pour voir le message]({jump_link})"
                     )
-
                 else:
                     print("Erreur : Le channel ID dans le JSON est introuvable.")
             else:
@@ -80,40 +94,60 @@ async def on_message_delete(message):
     if not message.guild:
         return
 
+    # On met le message en attente 2 secondes
+    pending_deletes[message.id] = message
+    await asyncio.sleep(2)
+
+    # Si le message a été retiré du pending (= Tupper détecté), on ignore
+    if message.id not in pending_deletes:
+        return
+
+    # Suppression normale, on log
+    del pending_deletes[message.id]
+
     try:
         hashes_found = []
         for attachment in message.attachments:
-            # On ne hash que les images
             if attachment.content_type and attachment.content_type.startswith('image/'):
                 try:
                     file_hash = await Utils.get_image_hash(attachment)
                     hashes_found.append(file_hash)
                 except:
                     continue
-        # On transforme la liste en chaîne de caractères (hash1,hash2)
+
         str_hashes = ",".join(hashes_found) if hashes_found else None
 
-        # On regarde les 3 derniers logs au cas où il y aurait eu plusieurs suppressions
         async for entry in message.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_delete):
-            
             if entry.target.id == message.author.id:
+                if entry.user.id in IGNORED_IDS:
+                    return
+
+                # On ignore si l'auteur du message supprimé est un bot
+                if message.author.bot:
+                    return
+
+                # On vérifie que le log a moins de 5 secondes
+                age = datetime.now(timezone.utc) - entry.created_at
+                if age > timedelta(seconds=5):
+                    return
+
                 Database.database_incrementation(
-                    message.guild.id, 
-                    message.guild.name, 
-                    message.content, 
-                    message.author.name, 
-                    message.author.id, 
-                    entry.user.name, 
+                    message.guild.id,
+                    message.guild.name,
+                    message.content,
+                    message.author.name,
+                    message.author.id,
+                    entry.user.name,
                     entry.user.id,
                     str_hashes
                 )
                 print(f"Log enregistré : {entry.user.name} a supprimé le message de {message.author.name}")
-                return # On sort pour éviter de logger plusieurs fois
+                return
 
     except discord.Forbidden:
-            print("Erreur : Je n'ai pas la permission de voir les logs d'audit.")
+        print("Erreur : Je n'ai pas la permission de voir les logs d'audit.")
     except Exception as e:
-            print(f"Erreur imprévue : {e}")
+        print(f"Erreur imprévue : {e}")
     
 @bot.tree.command(
     name="hello",
