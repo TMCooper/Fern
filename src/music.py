@@ -4,6 +4,7 @@ import os, asyncio
 class Music:
     YDL_OPTIONS = {
         'format': 'bestaudio/best',
+        'ffmpeg_location': '/usr/bin/ffmpeg',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
