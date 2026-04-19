@@ -1,5 +1,6 @@
 from src.db import Database, Utils
-import discord, os, subprocess, json, asyncio
+from src.music import Music
+import discord, os, subprocess, json, asyncio, time
 from dotenv import load_dotenv
 from discord import app_commands
 from discord.ext import commands
@@ -217,5 +218,85 @@ async def setup_alerts(interaction: discord.Interaction, channel: discord.TextCh
 
     except Exception as e:
         await interaction.response.send_message(f"Erreur lors de l'écriture du fichier : {e}", ephemeral=True)
+
+@bot.tree.command(name="play", description="Joue une musique depuis YouTube")
+async def play(interaction: discord.Interaction, url: str):
+    member = interaction.user
+
+    # Vérification du salon vocal
+    if not member.voice or not member.voice.channel:
+        return await interaction.response.send_message(
+            "Tu dois être dans un salon vocal", 
+            ephemeral=True
+        )
+
+    # On "diffère" la réponse car le téléchargement peut prendre plus de 3 secondes
+    await interaction.response.defer()
+
+    vocal_channel = member.voice.channel
+    vc = interaction.guild.voice_client
+
+    # Connexion ou déplacement
+    if vc:
+        if vc.channel != vocal_channel:
+            await vc.move_to(vocal_channel)
+    else:
+        vc = await vocal_channel.connect()
+
+    try:
+        title, file_path = await Music.download(url)
+
+        # Lecture de l'audio
+        if vc.is_playing():
+            vc.stop()
+        
+        def after_playing(error):
+            if error:
+                print(f"Erreur lors de la lecture : {error}")
+            
+            # On vérifie si le fichier existe et on le supprime
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    print(f"Fichier supprimé : {file_path}")
+                except Exception as e:
+                    print(f"Impossible de supprimer le fichier : {e}")
+
+        vc.play(discord.FFmpegPCMAudio(file_path), after=after_playing)
+        
+        await interaction.followup.send(f"En train de jouer : **{title}**")
+
+    except Exception as e:
+        print(f"Erreur: {e}")
+        await interaction.followup.send("Une erreur est survenue lors du téléchargement.")
+
+@bot.tree.command(name="stop", description="Déconnecte le bot")
+async def stop(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    
+    if vc:
+        path_to_clean = getattr(vc, "current_file", None)
+        
+        if vc.is_playing() or vc.is_paused():
+            vc.stop()
+
+        if vc.source:
+            try:
+                vc.source.cleanup()
+            except:
+                pass
+
+        await vc.disconnect()
+        
+        if path_to_clean and os.path.exists(path_to_clean):
+            try:
+                os.remove(path_to_clean)
+                print(f"Nettoyage réussi : {path_to_clean}")
+            except Exception as e:
+                print(f"Échec du nettoyage manuel : {e}")
+        
+        await interaction.response.send_message("Déconnecté.")
+    else:
+        await interaction.response.send_message("Je ne suis pas en vocal.", ephemeral=True)
 
 bot.run(TOKEN)
