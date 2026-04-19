@@ -270,33 +270,35 @@ async def play(interaction: discord.Interaction, url: str):
         print(f"Erreur: {e}")
         await interaction.followup.send("Une erreur est survenue lors du téléchargement.")
 
-@bot.tree.command(name="stop", description="Déconnecte le bot")
+@bot.tree.command(name="stop", description="Déconnecte le bot proprement")
 async def stop(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     
-    if vc:
-        path_to_clean = getattr(vc, "current_file", None)
-        
+    if not vc:
+        return await interaction.response.send_message("Je ne suis pas connecté à un salon vocal.", ephemeral=True)
+
+    try:
+        await interaction.response.send_message("Déconnexion en cours...")
+
         if vc.is_playing() or vc.is_paused():
             vc.stop()
 
-        if vc.source:
-            try:
-                vc.source.cleanup()
-            except:
-                pass
+        path_to_clean = getattr(vc, "current_file", None)
 
         await vc.disconnect()
-        
+
         if path_to_clean and os.path.exists(path_to_clean):
+            await asyncio.sleep(0.5)
             try:
                 os.remove(path_to_clean)
-                print(f"Nettoyage réussi : {path_to_clean}")
+                print(f"Fichier nettoyé : {path_to_clean}")
             except Exception as e:
-                print(f"Échec du nettoyage manuel : {e}")
-        
-        await interaction.response.send_message("Déconnecté.")
-    else:
-        await interaction.response.send_message("Je ne suis pas en vocal.", ephemeral=True)
+                print(f"Erreur nettoyage : {e}")
+
+    except Exception as e:
+        print(f"Erreur lors du stop : {e}")
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Une erreur est survenue lors de la déconnexion.")
 
 bot.run(TOKEN)
