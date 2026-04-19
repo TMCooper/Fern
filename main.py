@@ -1,6 +1,6 @@
 from src.db import Database, Utils
 from src.music import Music
-import discord, os, subprocess, json, asyncio, time
+import discord, os, subprocess, json, asyncio, re
 from dotenv import load_dotenv
 from discord import app_commands
 from discord.ext import commands
@@ -94,6 +94,14 @@ async def on_message(message):
 async def on_message_delete(message):
     if not message.guild:
         return
+    
+    content = message.content.strip()
+    # Le regex vérifie si le message ne contient QUE des mentions (utilisateur <@id> ou <@!id>, ou rôle <@&id>) et des espaces
+    is_only_ping = re.fullmatch(r'(?:<@[!&]?\d+>\s*)+', content)
+
+    # Si ce n'est qu'un ping (ou vide) et qu'il n'y a pas d'image, on ne logge pas
+    if (is_only_ping or not content) and not message.attachments:
+        return
 
     # On met le message en attente 2 secondes
     pending_deletes[message.id] = message
@@ -149,7 +157,7 @@ async def on_message_delete(message):
         print("Erreur : Je n'ai pas la permission de voir les logs d'audit.")
     except Exception as e:
         print(f"Erreur imprévue : {e}")
-    
+
 @bot.tree.command(
     name="hello",
     description="Petit bonjour de Fern",
@@ -300,5 +308,34 @@ async def stop(interaction: discord.Interaction):
 
         if not interaction.response.is_done():
             await interaction.response.send_message("Une erreur est survenue lors de la déconnexion.")
+
+@bot.tree.command(
+    name="sql", 
+    description="permet l'execution des commande sql directement depuis discord"
+)
+@app_commands.describe(
+    command="command sql"
+)
+async def sql(interaction: discord.Interaction, command: str):
+    if interaction.user.id == DEV_ID:
+        success, result = Database.execute_query(command)
+        if success:
+            if isinstance(result, list):
+                if not result:
+                    msg = "Aucun résultat."
+                else:
+                    msg = "\n".join(str(row) for row in result)
+            else:
+                msg = str(result)
+                
+            response_text = f"**Commande exécutée avec succès :**\n```\n{msg}\n```"
+            if len(response_text) > 2000:
+                response_text = response_text[:1990] + "...\n```"
+                
+            await interaction.response.send_message(response_text)
+        else:
+            await interaction.response.send_message(f"**Erreur SQL :**\n```\n{result}\n```")
+    else:
+        return await interaction.response.send_message("Vous n'avez pas les permissions pour executer cette commande", ephemeral=True)
 
 bot.run(TOKEN)

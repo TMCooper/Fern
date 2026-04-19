@@ -120,6 +120,23 @@ class Database:
         except sqlite3.Error as e:
             print(f"Une erreur SQLite est survenue lors du lookup : {e}")
             return False
+    
+    def execute_query(command):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute(command)
+                
+                if command.strip().upper().startswith("SELECT"):
+                    res = cur.fetchall()
+                    return True, res
+                else:
+                    # Pour UPDATE, INSERT, DELETE...
+                    return True, f"Lignes affectées : {cur.rowcount}"
+        except sqlite3.Error as e:
+            return False, str(e)
+        except Exception as e:
+            return False, str(e)
 
 class Utils:
     async def get_image_hash(attachment):
