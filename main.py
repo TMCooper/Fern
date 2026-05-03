@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
+import random
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
@@ -116,13 +117,13 @@ async def ban_and_delete(interaction: discord.Interaction, message: discord.Mess
     try:
         await message.delete()
         if success:
-            await interaction.response.send_message(f"✅ Le message de {message.author.mention} a été supprimé et ajouté à la base de données.", ephemeral=True)
+            await interaction.response.send_message(f"Le message de {message.author.mention} a été supprimé et ajouté à la base de données.", ephemeral=True)
         else:
-            await interaction.response.send_message(f"⚠️ Le message de {message.author.mention} a été supprimé, mais non ajouté à la db : {msg}", ephemeral=True)
+            await interaction.response.send_message(f"Le message de {message.author.mention} a été supprimé, mais non ajouté à la db : {msg}", ephemeral=True)
     except discord.Forbidden:
-        await interaction.response.send_message(f"⚠️ Le message a été ajouté (Status: {msg}) mais je n'ai pas la permission de le supprimer.", ephemeral=True)
+        await interaction.response.send_message(f"Le message a été ajouté (Status: {msg}) mais je n'ai pas la permission de le supprimer.", ephemeral=True)
     except Exception as e:
-        await interaction.response.send_message(f"❌ Erreur lors de la suppression : {e}", ephemeral=True)
+        await interaction.response.send_message(f"Erreur lors de la suppression : {e}", ephemeral=True)
 
 @bot.tree.command(name="ban_texte", description="Ajoute manuellement un texte à la base de données des messages interdits")
 @app_commands.describe(texte="Le texte à bannir")
@@ -139,9 +140,9 @@ async def ban_texte(interaction: discord.Interaction, texte: str):
         ""
     )
     if success:
-        await interaction.response.send_message("✅ Le texte a été ajouté à la base de données des messages interdits.", ephemeral=True)
+        await interaction.response.send_message("Le texte a été ajouté à la base de données des messages interdits.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"⚠️ Impossible d'ajouter : {msg}", ephemeral=True)
+        await interaction.response.send_message(f"Impossible d'ajouter : {msg}", ephemeral=True)
 
 @bot.tree.command(
     name="hello",
@@ -195,10 +196,12 @@ async def setup_alerts(interaction: discord.Interaction, channel: discord.TextCh
             except json.JSONDecodeError:
                 data = {}
 
-    data[str(interaction.guild.id)] = {
-        "channel_id": channel.id,
-        "role_id": role.id
-    }
+    guild_id = str(interaction.guild.id)
+    if guild_id not in data:
+        data[guild_id] = {}
+        
+    data[guild_id]["channel_id"] = channel.id
+    data[guild_id]["role_id"] = role.id
 
     try:
         with open(config_file, "w", encoding="utf-8") as f:
@@ -325,5 +328,72 @@ async def sql(interaction: discord.Interaction, command: str):
             await interaction.response.send_message(f"**Erreur SQL :**\n```\n{result}\n```")
     else:
         return await interaction.response.send_message("Vous n'avez pas les permissions pour executer cette commande", ephemeral=True)
+
+@bot.tree.command(
+    name="champignon_setup",
+    description="Configure le rôle pour la commande champignon"
+)
+@app_commands.describe(
+    role="role cible"
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def champ_setup(interaction: discord.Interaction, role: discord.Role):
+    config_file = "config.json"
+    data = {}
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+    
+    guild_id = str(interaction.guild.id)
+    if guild_id not in data:
+        data[guild_id] = {}
+        
+    data[guild_id]["champignon_role_id"] = role.id
+
+    try:
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        
+        await interaction.response.send_message(
+            f"✅ Le rôle {role.mention} a été configuré pour la commande champignon.",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.response.send_message(f"Erreur lors de l'écriture du fichier : {e}", ephemeral=True)
+
+@bot.tree.command(
+    name="champignon",
+    description="Tire au sort un membre ayant le rôle configuré (loterie)"
+)
+async def champignon(interaction: discord.Interaction):
+    config_file = "config.json"
+    if not os.path.exists(config_file):
+        return await interaction.response.send_message("Le bot n'est pas encore configuré sur ce serveur.", ephemeral=True)
+        
+    with open(config_file, "r", encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            data = {}
+            
+    guild_id = str(interaction.guild.id)
+    if guild_id not in data or "champignon_role_id" not in data[guild_id]:
+        return await interaction.response.send_message("Le rôle champignon n'est pas configuré. Utilisez `/champignon_setup`.", ephemeral=True)
+        
+    role_id = data[guild_id]["champignon_role_id"]
+    role = interaction.guild.get_role(role_id)
+    
+    if not role:
+        return await interaction.response.send_message("Le rôle configuré n'existe plus sur le serveur.", ephemeral=True)
+        
+    members_with_role = role.members
+    if not members_with_role:
+        return await interaction.response.send_message(f"Aucun membre ne possède le rôle {role.name}.", ephemeral=True)
+        
+    winner = random.choice(members_with_role)
+    await interaction.response.send_message(f"Le grand gagnant est {winner.mention} !")
 
 bot.run(TOKEN)
