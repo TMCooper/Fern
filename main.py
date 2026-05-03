@@ -372,6 +372,7 @@ async def champ_setup(interaction: discord.Interaction, role_cible: discord.Role
     name="champignon",
     description="Tire au sort un membre et lui donne le rôle récompense"
 )
+@app_commands.checks.has_permissions(manage_guild=True)
 async def champignon(interaction: discord.Interaction):
     config_file = "config.json"
     if not os.path.exists(config_file):
