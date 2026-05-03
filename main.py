@@ -12,9 +12,6 @@ DEV_GUILD_ID = os.getenv('DEV_GUILD_ID')
 DEV_ID = int(os.getenv('DEV_ID'))
 Database.check_database()
 
-pending_deletes = {}
-IGNORED_IDS = [431544605209788416, 276060004262477825]
-
 # Configuration du bot
 intents = discord.Intents.all()
 intents.message_content = True
@@ -33,21 +30,19 @@ async def on_ready():
     except Exception as e:
         print(f"Erreur lors de la synchronisation des commandes : {e}")
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Vous n'avez pas les permissions nécessaires pour utiliser cette commande.", ephemeral=True)
+    else:
+        print(f"Erreur d'application : {error}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user or message.webhook_id is not None:
-        return
-
-    # Si c'est un webhook qui reposte (Tupper), on nettoie le pending
-    if message.webhook_id and message.author.bot:
-        to_remove = [
-            mid for mid, msg in pending_deletes.items()
-            if msg.content and msg.content.split(".", 1)[-1].strip() == message.content
-        ]
-        for mid in to_remove:
-            del pending_deletes[mid]
-
-        await bot.process_commands(message)
         return
 
     # Calcul du hash si il y a une ou plusieurs images
@@ -90,73 +85,63 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-@bot.event
-async def on_message_delete(message):
-    if not message.guild:
-        return
+@bot.tree.context_menu(name="Bannir et Supprimer")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def ban_and_delete(interaction: discord.Interaction, message: discord.Message):
+    # On calcule les hash si images
+    hashes_found = []
+    for attachment in message.attachments:
+        if attachment.content_type and attachment.content_type.startswith('image/'):
+            try:
+                file_hash = await Utils.get_image_hash(attachment)
+                hashes_found.append(file_hash)
+            except:
+                continue
+
+    str_hashes = ",".join(hashes_found) if hashes_found else ""
+
+    # Ajout à la base de données
+    success, msg = Database.database_incrementation(
+        interaction.guild.id,
+        interaction.guild.name,
+        message.content,
+        message.author.name,
+        message.author.id,
+        interaction.user.name,
+        interaction.user.id,
+        str_hashes
+    )
     
-    content = message.content.strip()
-    # Le regex vérifie si le message ne contient QUE des mentions (utilisateur <@id> ou <@!id>, ou rôle <@&id>) et des espaces
-    is_only_ping = re.fullmatch(r'(?:<@[!&]?\d+>\s*)+', content)
-
-    # Si ce n'est qu'un ping (ou vide) et qu'il n'y a pas d'image, on ne logge pas
-    if (is_only_ping or not content) and not message.attachments:
-        return
-
-    # On met le message en attente 2 secondes
-    pending_deletes[message.id] = message
-    await asyncio.sleep(2)
-
-    # Si le message a été retiré du pending (= Tupper détecté), on ignore
-    if message.id not in pending_deletes:
-        return
-
-    # Suppression normale, on log
-    del pending_deletes[message.id]
-
+    # Suppression du message
     try:
-        hashes_found = []
-        for attachment in message.attachments:
-            if attachment.content_type and attachment.content_type.startswith('image/'):
-                try:
-                    file_hash = await Utils.get_image_hash(attachment)
-                    hashes_found.append(file_hash)
-                except:
-                    continue
-
-        str_hashes = ",".join(hashes_found) if hashes_found else None
-
-        async for entry in message.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_delete):
-            if entry.target.id == message.author.id:
-                if entry.user.id in IGNORED_IDS:
-                    return
-
-                # On ignore si l'auteur du message supprimé est un bot
-                if message.author.bot:
-                    return
-
-                # On vérifie que le log a moins de 5 secondes
-                age = datetime.now(timezone.utc) - entry.created_at
-                if age > timedelta(seconds=5):
-                    return
-
-                Database.database_incrementation(
-                    message.guild.id,
-                    message.guild.name,
-                    message.content,
-                    message.author.name,
-                    message.author.id,
-                    entry.user.name,
-                    entry.user.id,
-                    str_hashes
-                )
-                print(f"Log enregistré : {entry.user.name} a supprimé le message de {message.author.name}")
-                return
-
+        await message.delete()
+        if success:
+            await interaction.response.send_message(f"✅ Le message de {message.author.mention} a été supprimé et ajouté à la base de données.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"⚠️ Le message de {message.author.mention} a été supprimé, mais non ajouté à la db : {msg}", ephemeral=True)
     except discord.Forbidden:
-        print("Erreur : Je n'ai pas la permission de voir les logs d'audit.")
+        await interaction.response.send_message(f"⚠️ Le message a été ajouté (Status: {msg}) mais je n'ai pas la permission de le supprimer.", ephemeral=True)
     except Exception as e:
-        print(f"Erreur imprévue : {e}")
+        await interaction.response.send_message(f"❌ Erreur lors de la suppression : {e}", ephemeral=True)
+
+@bot.tree.command(name="ban_texte", description="Ajoute manuellement un texte à la base de données des messages interdits")
+@app_commands.describe(texte="Le texte à bannir")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def ban_texte(interaction: discord.Interaction, texte: str):
+    success, msg = Database.database_incrementation(
+        interaction.guild.id,
+        interaction.guild.name,
+        texte,
+        "Ajout Manuel",
+        "0",
+        interaction.user.name,
+        interaction.user.id,
+        ""
+    )
+    if success:
+        await interaction.response.send_message("✅ Le texte a été ajouté à la base de données des messages interdits.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ Impossible d'ajouter : {msg}", ephemeral=True)
 
 @bot.tree.command(
     name="hello",
@@ -173,6 +158,9 @@ async def hello(interaction: discord.Interaction, member: discord.Member):
     description="Recupère les log des messages suprimer sur le server ou la commande est executé si autorisé",
 )
 async def logdata(interaction: discord.Interaction):
+    if interaction.user.id != DEV_ID:
+        return await interaction.response.send_message("Vous n'avez pas les permissions pour executer cette commande", ephemeral=True)
+
     await interaction.response.defer(thinking=True, ephemeral=True)
     filename = Database.database_show(interaction.guild.id, interaction.user.id, DEV_ID)
 

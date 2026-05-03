@@ -54,8 +54,12 @@ class Database:
                 cur = con.cursor()
                 cur.execute("INSERT INTO Alert VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)", (str(id_server), name_server, message_content, message_author, message_author_id, deleter_name, deleter_id, hashes)) # Les ? permette d'eviter une injection sql
                 con.commit() # On valide notre entrée
+                return True, "Ajouté avec succès"
+        except sqlite3.IntegrityError:
+            return False, "Ce contenu est déjà dans la base de données (doublon)."
         except sqlite3.Error as e:
             print(f"Une erreur SQLite est survenue : {e}")
+            return False, "Erreur de base de données."
 
     def database_show(id_server, asker_id, DEV_ID):
         if asker_id != DEV_ID:
