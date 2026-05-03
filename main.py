@@ -331,13 +331,14 @@ async def sql(interaction: discord.Interaction, command: str):
 
 @bot.tree.command(
     name="champignon_setup",
-    description="Configure le rôle pour la commande champignon"
+    description="Configure les rôles pour la loterie champignon"
 )
 @app_commands.describe(
-    role="role cible"
+    role_cible="Le rôle parmi lequel tirer au sort",
+    role_recompense="Le rôle à donner a la personne tirer au sort"
 )
 @app_commands.checks.has_permissions(manage_guild=True)
-async def champ_setup(interaction: discord.Interaction, role: discord.Role):
+async def champ_setup(interaction: discord.Interaction, role_cible: discord.Role, role_recompense: discord.Role):
     config_file = "config.json"
     data = {}
     if os.path.exists(config_file):
@@ -351,14 +352,17 @@ async def champ_setup(interaction: discord.Interaction, role: discord.Role):
     if guild_id not in data:
         data[guild_id] = {}
         
-    data[guild_id]["champignon_role_id"] = role.id
+    data[guild_id]["champignon_role_cible_id"] = role_cible.id
+    data[guild_id]["champignon_role_recompense_id"] = role_recompense.id
 
     try:
         with open(config_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         
         await interaction.response.send_message(
-            f"✅ Le rôle {role.mention} a été configuré pour la commande champignon.",
+            f"✅ Configuration réussie :\n"
+            f"• Rôle ciblé : {role_cible.mention}\n"
+            f"• Rôle récompense : {role_recompense.mention}",
             ephemeral=True
         )
     except Exception as e:
@@ -366,7 +370,7 @@ async def champ_setup(interaction: discord.Interaction, role: discord.Role):
 
 @bot.tree.command(
     name="champignon",
-    description="Tire au sort un membre ayant le rôle configuré (loterie)"
+    description="Tire au sort un membre et lui donne le rôle récompense"
 )
 async def champignon(interaction: discord.Interaction):
     config_file = "config.json"
@@ -380,20 +384,30 @@ async def champignon(interaction: discord.Interaction):
             data = {}
             
     guild_id = str(interaction.guild.id)
-    if guild_id not in data or "champignon_role_id" not in data[guild_id]:
-        return await interaction.response.send_message("Le rôle champignon n'est pas configuré. Utilisez `/champignon_setup`.", ephemeral=True)
+    if guild_id not in data or "champignon_role_cible_id" not in data[guild_id] or "champignon_role_recompense_id" not in data[guild_id]:
+        return await interaction.response.send_message("Les rôles champignon ne sont pas configurés. Utilisez `/champignon_setup`.", ephemeral=True)
         
-    role_id = data[guild_id]["champignon_role_id"]
-    role = interaction.guild.get_role(role_id)
+    role_cible_id = data[guild_id]["champignon_role_cible_id"]
+    role_recompense_id = data[guild_id]["champignon_role_recompense_id"]
     
-    if not role:
-        return await interaction.response.send_message("Le rôle configuré n'existe plus sur le serveur.", ephemeral=True)
+    role_cible = interaction.guild.get_role(role_cible_id)
+    role_recompense = interaction.guild.get_role(role_recompense_id)
+    
+    if not role_cible or not role_recompense:
+        return await interaction.response.send_message("L'un des rôles configurés n'existe plus sur le serveur.", ephemeral=True)
         
-    members_with_role = role.members
+    members_with_role = role_cible.members
     if not members_with_role:
-        return await interaction.response.send_message(f"Aucun membre ne possède le rôle {role.name}.", ephemeral=True)
+        return await interaction.response.send_message(f"Aucun membre ne possède le rôle {role_cible.name}.", ephemeral=True)
         
     winner = random.choice(members_with_role)
-    await interaction.response.send_message(f"Le grand gagnant est {winner.mention} !")
+    
+    try:
+        await winner.add_roles(role_recompense)
+        await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Il a reçu le rôle {role_recompense.mention}.")
+    except discord.Forbidden:
+        await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Erreur : Je n'ai pas les permissions pour lui donner le rôle {role_recompense.name}.")
+    except Exception as e:
+        await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Erreur lors de l'ajout du rôle : {e}")
 
 bot.run(TOKEN)
