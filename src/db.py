@@ -1,4 +1,4 @@
-import os, sqlite3, hashlib
+import os, sqlite3, hashlib, json
 
 class Database:
     PATH = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +33,7 @@ class Database:
                             deleter_name TEXT,
                             deleter_id TEXT,
                             image_hashes TEXT,
+                            deleted_at TEXT,
                             UNIQUE(id_server, message_content, image_hashes)
                         )
                     """) # Creation de la table contenant nos données si celle ci n'existe pas
@@ -48,11 +49,11 @@ class Database:
         except sqlite3.Error as e:
             print(f"Une erreur SQLite est survenue : {e}")
 
-    def database_incrementation(id_server, name_server, message_content, message_author, message_author_id, deleter_name, deleter_id, hashes):
+    def database_incrementation(id_server, name_server, message_content, message_author, message_author_id, deleter_name, deleter_id, hashes, deleted_at):
         try:
             with sqlite3.connect(Database.PATH_DB) as con:
                 cur = con.cursor()
-                cur.execute("INSERT INTO Alert VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)", (str(id_server), name_server, message_content, message_author, message_author_id, deleter_name, deleter_id, hashes)) # Les ? permette d'eviter une injection sql
+                cur.execute("INSERT INTO Alert VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (str(id_server), name_server, message_content, message_author, message_author_id, deleter_name, deleter_id, hashes, deleted_at)) # Les ? permette d'eviter une injection sql
                 con.commit() # On valide notre entrée
                 return True, "Ajouté avec succès"
         except sqlite3.IntegrityError:
@@ -72,16 +73,27 @@ class Database:
                 
                 if not res:
                     return "Aucune donnée"
+                filename = f"export_{id_server}.json"
                 
-                filename = f"export_{id_server}.txt"
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write("ID | ID Serv | Nom Serv | Contenu | Auteur | ID Auteur | Supprimé par | ID Suppr | Hashes Images\n")
-                    f.write("-" * 100 + "\n")
-                    for row in res:
-                        line = " | ".join(str(item) for item in row)
-                        f.write(line + "\n")
+                export_data = []
+                for row in res:
+                    export_data.append({
+                        "id": row[0],
+                        "id_server": row[1],
+                        "name_server": row[2],
+                        "message_content": row[3],
+                        "message_author": row[4],
+                        "message_author_id": row[5],
+                        "deleter_name": row[6],
+                        "deleter_id": row[7],
+                        "image_hashes": row[8],
+                        "deleted_at": row[9] if len(row) > 9 else None
+                    })
 
-                    return filename
+                with open(filename, "w", encoding="utf-8") as f:
+                    json.dump(export_data, f, indent=4, ensure_ascii=False)
+
+                return filename
 
         except sqlite3.Error as e:
             print(f"Une erreur SQLite : {e}")

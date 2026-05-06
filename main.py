@@ -110,7 +110,8 @@ async def ban_and_delete(interaction: discord.Interaction, message: discord.Mess
         message.author.id,
         interaction.user.name,
         interaction.user.id,
-        str_hashes
+        str_hashes,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
     
     # Suppression du message
@@ -137,7 +138,8 @@ async def ban_texte(interaction: discord.Interaction, texte: str):
         "0",
         interaction.user.name,
         interaction.user.id,
-        ""
+        "",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
     if success:
         await interaction.response.send_message("Le texte a été ajouté à la base de données des messages interdits.", ephemeral=True)
