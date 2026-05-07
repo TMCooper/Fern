@@ -482,6 +482,6 @@ async def roulette(interaction: discord.Interaction):
         
     winner = random.choice(members_with_role)
     
-    await interaction.response.send_message(f"🎰 La roulette a tourné... et s'arrête sur {winner.mention} !")
+    await interaction.response.send_message(f"La roulette a tourné... et s'arrête sur {winner.mention} !")
 
 bot.run(TOKEN)
