@@ -413,4 +413,75 @@ async def champignon(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Erreur lors de l'ajout du rôle : {e}")
 
+@bot.tree.command(
+    name="roulette_setup",
+    description="Configure le rôle pour la commande roulette"
+)
+@app_commands.describe(
+    role_cible="Le rôle parmi lequel tirer au sort"
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def roulette_setup(interaction: discord.Interaction, role_cible: discord.Role):
+    config_file = "config.json"
+    data = {}
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+    
+    guild_id = str(interaction.guild.id)
+    if guild_id not in data:
+        data[guild_id] = {}
+        
+    data[guild_id]["roulette_role_cible_id"] = role_cible.id
+
+    try:
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        
+        await interaction.response.send_message(
+            f"Configuration de la roulette réussie :\n"
+            f"• Rôle ciblé : {role_cible.mention}",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.response.send_message(f"Erreur lors de l'écriture du fichier : {e}", ephemeral=True)
+
+@bot.tree.command(
+    name="roulette",
+    description="Tire au sort un membre ayant le rôle configuré et le mentionne"
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def roulette(interaction: discord.Interaction):
+    config_file = "config.json"
+    if not os.path.exists(config_file):
+        return await interaction.response.send_message("Le bot n'est pas encore configuré sur ce serveur.", ephemeral=True)
+        
+    with open(config_file, "r", encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            data = {}
+            
+    guild_id = str(interaction.guild.id)
+    if guild_id not in data or "roulette_role_cible_id" not in data[guild_id]:
+        return await interaction.response.send_message("Le rôle pour la roulette n'est pas configuré. Utilisez `/roulette_setup`.", ephemeral=True)
+        
+    role_cible_id = data[guild_id]["roulette_role_cible_id"]
+    
+    role_cible = interaction.guild.get_role(role_cible_id)
+    
+    if not role_cible:
+        return await interaction.response.send_message("Le rôle configuré n'existe plus sur le serveur.", ephemeral=True)
+        
+    members_with_role = role_cible.members
+    if not members_with_role:
+        return await interaction.response.send_message(f"Aucun membre ne possède le rôle {role_cible.name}.", ephemeral=True)
+        
+    winner = random.choice(members_with_role)
+    
+    await interaction.response.send_message(f"🎰 La roulette a tourné... et s'arrête sur {winner.mention} !")
+
 bot.run(TOKEN)
