@@ -1,10 +1,11 @@
 import os, sqlite3, hashlib, json
+from datetime import datetime
 
 class Database:
     PATH = os.path.dirname(os.path.abspath(__file__))
     PATH_DATA = os.path.join(PATH, "database")
     PATH_DB = os.path.join(PATH_DATA, "database.db")
-    
+
     def check_database():
 
         if not os.path.exists(Database.PATH_DB): # Si le fichier database.db n'existe pas
@@ -12,9 +13,8 @@ class Database:
             with open(Database.PATH_DB, 'w'):
                 os.utime(Database.PATH_DB, None) # et on crée le fichier 
             
-            Database.create_database(Database.PATH_DB) # Ensuite on interagie avec le fichier pour crée les base de nos data
+        Database.create_database(Database.PATH_DB) 
         return True
-        
     
     def create_database(PATH_DB):
         try:
@@ -37,6 +37,36 @@ class Database:
                             UNIQUE(id_server, message_content, image_hashes)
                         )
                     """) # Creation de la table contenant nos données si celle ci n'existe pas
+                
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS Members (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        display_name TEXT,
+                        last_seen TEXT,
+                        UNIQUE(guild_id, user_id)
+                    )
+                """)
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS Bans (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        banned_by_name TEXT NOT NULL,
+                        banned_by_id TEXT NOT NULL,
+                        reason TEXT,
+                        banned_at TEXT NOT NULL,
+                        is_active INTEGER DEFAULT 1,
+                        unbanned_by_name TEXT,
+                        unbanned_by_id TEXT,
+                        unbanned_at TEXT,
+                        unban_reason TEXT
+                    )
+                """)
 
                 con.commit() # commit permet de valider nos modifications
                 res = cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Alert'") # Permet de verifier
@@ -153,6 +183,155 @@ class Database:
             return False, str(e)
         except Exception as e:
             return False, str(e)
+
+
+    def upsert_member(guild_id, user_id, username, display_name):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO Members (guild_id, user_id, username, display_name, last_seen)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                        username = excluded.username,
+                        display_name = excluded.display_name,
+                        last_seen = excluded.last_seen
+                """, (str(guild_id), str(user_id), username, display_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (upsert_member) : {e}")
+            return False
+
+    def search_members(guild_id, query):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                if not query:
+                    cur.execute("SELECT user_id, username, display_name FROM Members WHERE guild_id = ? LIMIT 25", (str(guild_id),))
+                else:
+                    cur.execute("""
+                        SELECT user_id, username, display_name FROM Members 
+                        WHERE guild_id = ? AND (username LIKE ? OR display_name LIKE ?) 
+                        LIMIT 25
+                    """, (str(guild_id), f"%{query}%", f"%{query}%"))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (search_members) : {e}")
+            return []
+
+    def search_banned_members(guild_id, query):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                sql = """
+                    SELECT Bans.user_id,
+                           CASE WHEN Bans.username = 'Utilisateur Inconnu' AND Members.username IS NOT NULL THEN Members.username ELSE Bans.username END as username
+                    FROM Bans
+                    LEFT JOIN Members ON Bans.guild_id = Members.guild_id AND Bans.user_id = Members.user_id
+                    WHERE Bans.guild_id = ? AND Bans.is_active = 1
+                """
+                if not query:
+                    cur.execute(sql + " LIMIT 25", (str(guild_id),))
+                else:
+                    cur.execute(sql + " AND (Bans.username LIKE ? OR Members.username LIKE ?) LIMIT 25", (str(guild_id), f"%{query}%", f"%{query}%"))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (search_banned_members) : {e}")
+            return []
+
+    def add_ban(guild_id, user_id, username, banned_by_name, banned_by_id, reason):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                # Sécurité : Si un ban était resté actif par erreur dans la DB, on le désactive avant d'insérer le nouveau
+                cur.execute("UPDATE Bans SET is_active = 0 WHERE guild_id = ? AND user_id = ? AND is_active = 1", (str(guild_id), str(user_id)))
+                
+                # System d'historique préservé
+                cur.execute("""
+                    INSERT INTO Bans (guild_id, user_id, username, banned_by_name, banned_by_id, reason, banned_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """, (str(guild_id), str(user_id), username, banned_by_name, str(banned_by_id), reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (add_ban) : {e}")
+            return False
+
+    def remove_ban(guild_id, user_id, unbanned_by_name, unbanned_by_id, unban_reason):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                # On met à jour le ban actif en y ajoutant la raison du déban
+                cur.execute("""
+                    UPDATE Bans 
+                    SET is_active = 0, unbanned_by_name = ?, unbanned_by_id = ?, unbanned_at = ?, unban_reason = ?
+                    WHERE guild_id = ? AND user_id = ? AND is_active = 1
+                """, (unbanned_by_name, str(unbanned_by_id), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), unban_reason, str(guild_id), str(user_id)))
+                con.commit()
+                return cur.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (remove_ban) : {e}")
+            return False
+    
+    def get_ban_info(guild_id, user_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("""
+                    SELECT Bans.user_id,
+                           CASE WHEN Bans.username = 'Utilisateur Inconnu' AND Members.username IS NOT NULL THEN Members.username ELSE Bans.username END as username,
+                           Bans.banned_by_name, Bans.banned_by_id, Bans.reason, Bans.banned_at
+                    FROM Bans 
+                    LEFT JOIN Members ON Bans.guild_id = Members.guild_id AND Bans.user_id = Members.user_id
+                    WHERE Bans.guild_id = ? AND Bans.user_id = ? AND Bans.is_active = 1
+                """, (str(guild_id), str(user_id)))
+                row = cur.fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_ban_info) : {e}")
+            return None
+
+    def get_all_active_bans(guild_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("""
+                    SELECT Bans.user_id,
+                           CASE WHEN Bans.username = 'Utilisateur Inconnu' AND Members.username IS NOT NULL THEN Members.username ELSE Bans.username END as username,
+                           Bans.reason, Bans.banned_at, Bans.banned_by_name 
+                    FROM Bans 
+                    LEFT JOIN Members ON Bans.guild_id = Members.guild_id AND Bans.user_id = Members.user_id
+                    WHERE Bans.guild_id = ? AND Bans.is_active = 1
+                    ORDER BY Bans.banned_at DESC
+                """, (str(guild_id),))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_all_active_bans) : {e}")
+            return []
+
+    def get_user_history(guild_id, user_id):
+        """Récupère TOUT l'historique des bans (actifs et passés) d'un utilisateur"""
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("""
+                    SELECT Bans.*,
+                           CASE WHEN Bans.username = 'Utilisateur Inconnu' AND Members.username IS NOT NULL THEN Members.username ELSE Bans.username END as real_username
+                    FROM Bans
+                    LEFT JOIN Members ON Bans.guild_id = Members.guild_id AND Bans.user_id = Members.user_id
+                    WHERE Bans.guild_id = ? AND Bans.user_id = ?
+                    ORDER BY Bans.banned_at DESC
+                """, (str(guild_id), str(user_id)))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_user_history) : {e}")
+            return []
 
 class Utils:
     async def get_image_hash(attachment):

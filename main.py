@@ -1,5 +1,6 @@
 from src.db import Database, Utils
 from src.music import Music
+from src.BanListPagination import BanListPagination
 import discord, os, subprocess, json, asyncio, re
 from dotenv import load_dotenv
 from discord import app_commands
@@ -27,9 +28,30 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
+        print("Mise à jour du registre interne des membres...")
+        for guild in bot.guilds:
+            if not guild.chunked:
+                try:
+                    await guild.chunk()
+                except:
+                    pass
+            for member in guild.members:
+                Database.upsert_member(guild.id, member.id, member.name, member.display_name)
+        print("Registre interne des membres initialisé avec succès !\n")
         print(f"Synced {len(synced)} command(s) synchroniser")
     except Exception as e:
         print(f"Erreur lors de la synchronisation des commandes : {e}")
+
+@bot.event
+async def on_member_join(member):
+    # Dès qu'un utilisateur rejoint, on l'indexe dans la DB
+    Database.upsert_member(member.guild.id, member.id, member.name, member.display_name)
+
+@bot.event
+async def on_member_update(before, after):
+    # Si quelqu'un change de pseudo ou de surnom, on met à jour la DB
+    if before.name != after.name or before.display_name != after.display_name:
+        Database.upsert_member(after.guild.id, after.id, after.name, after.display_name)
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -483,5 +505,198 @@ async def roulette(interaction: discord.Interaction):
     winner = random.choice(members_with_role)
     
     await interaction.response.send_message(f"La roulette a tourné... et s'arrête sur {winner.mention} !")
+
+# --- CONFIGURATION DES AUTOCOMPLETES ---
+async def ban_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    members = Database.search_members(interaction.guild.id, current)
+    return [
+        app_commands.Choice(
+            name=f"{m['display_name'] or m['username']} ({m['username']}) — ID: {m['user_id']}", 
+            value=str(m['user_id'])
+        )
+        for m in members
+    ][:25]
+
+async def unban_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    banned_members = Database.search_banned_members(interaction.guild.id, current)
+    return [
+        app_commands.Choice(
+            name=f"{m['username']} — ID: {m['user_id']}", 
+            value=str(m['user_id'])
+        )
+        for m in banned_members
+    ][:25]
+
+@bot.tree.command(name="ban", description="Bannir un membre (présent ou ayant quitté le serveur).")
+@app_commands.autocomplete(user_id=ban_autocomplete)
+@app_commands.describe(user_id="Le membre ou l'ID à bannir", reason="Raison du bannissement")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban_member(interaction: discord.Interaction, user_id: str, reason: str = "Aucune raison fournie"):
+    await interaction.response.defer()
+    try:
+        user = await bot.fetch_user(int(user_id))
+        await interaction.guild.ban(user, reason=reason)
+        
+        db_members = Database.search_members(interaction.guild.id, user_id)
+        db_member = next((m for m in db_members if str(m['user_id']) == str(user_id)), None)
+        username = db_member['username'] if db_member else user.name
+
+        Database.add_ban(
+            guild_id=interaction.guild.id,
+            user_id=user_id,
+            username=username,
+            banned_by_name=interaction.user.name,
+            banned_by_id=interaction.user.id,
+            reason=reason
+        )
+        
+        embed = discord.Embed(title="Membre Banni", color=discord.Color.red(), timestamp=datetime.now())
+        if user.display_avatar:
+            embed.set_thumbnail(url=user.display_avatar.url)
+        embed.add_field(name="Utilisateur", value=f"{user.mention} (`{user.name}`)", inline=True)
+        embed.add_field(name="ID", value=f"`{user_id}`", inline=True)
+        embed.add_field(name="Modérateur", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Raison", value=f"*{reason}*", inline=False)
+        
+        await interaction.followup.send(embed=embed)
+        
+    except discord.Forbidden:
+        await interaction.followup.send("Je n'ai pas les permissions nécessaires pour bannir cet utilisateur.", ephemeral=True)
+    except (discord.NotFound, ValueError):
+        await interaction.followup.send("Impossible de trouver cet utilisateur sur Discord.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Une erreur est survenue : {e}", ephemeral=True)
+
+
+@bot.tree.command(name="unban", description="Débannir un membre via la base de données ou son ID.")
+@app_commands.autocomplete(user_id=unban_autocomplete)
+@app_commands.describe(user_id="Le membre banni ou son ID", reason="Raison du débannissement")
+@app_commands.checks.has_permissions(ban_members=True)
+async def unban_member(interaction: discord.Interaction, user_id: str, reason: str = "Aucune raison fournie"):
+    await interaction.response.defer()
+    try:
+        user = await bot.fetch_user(int(user_id))
+        await interaction.guild.unban(user, reason=reason)
+        
+        # Transmission de la raison du déban à la base de données
+        success = Database.remove_ban(
+            guild_id=interaction.guild.id,
+            user_id=user_id,
+            unbanned_by_name=interaction.user.name,
+            unbanned_by_id=interaction.user.id,
+            unban_reason=reason
+        )
+        
+        embed = discord.Embed(title="Membre Débanni", color=discord.Color.green(), timestamp=datetime.now())
+        if user.display_avatar:
+            embed.set_thumbnail(url=user.display_avatar.url)
+        embed.add_field(name="Utilisateur", value=f"{user.mention} (`{user.name}`)", inline=True)
+        embed.add_field(name="ID", value=f"`{user_id}`", inline=True)
+        embed.add_field(name="Modérateur", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Raison du déban", value=f"*{reason}*", inline=False)
+        
+        if not success:
+            embed.set_footer(text="Note: Ce ban n'était pas actif dans le registre persistant.")
+            
+        await interaction.followup.send(embed=embed)
+        
+    except discord.NotFound:
+        await interaction.followup.send("Cet utilisateur n'est pas banni de ce serveur.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send("Je n'ai pas la permission de débannir des membres.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Une erreur est survenue : {e}", ephemeral=True)
+
+
+@bot.tree.command(name="ban_list", description="Afficher la liste des membres actuellement bannis.")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban_list(interaction: discord.Interaction):
+    bans = Database.get_all_active_bans(interaction.guild.id)
+    view = BanListPagination(bans, per_page=5)
+    await interaction.response.send_message(embed=view.get_embed(), view=view)
+
+
+@bot.tree.command(name="ban_info", description="Voir les détails et la raison du bannissement d'un membre.")
+@app_commands.autocomplete(user_id=unban_autocomplete)
+@app_commands.describe(user_id="Le membre banni")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban_info(interaction: discord.Interaction, user_id: str):
+    ban = Database.get_ban_info(interaction.guild.id, user_id)
+    if not ban:
+        return await interaction.response.send_message("Aucune information trouvée dans la base de données.", ephemeral=True)
+    
+    try:
+        user = await bot.fetch_user(int(user_id))
+        avatar_url = user.display_avatar.url if user.display_avatar else None
+    except:
+        avatar_url = None
+
+    embed = discord.Embed(title=f"ℹ Infos Bannissement — {ban['username']}", color=discord.Color.orange())
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+        
+    embed.add_field(name="Membre", value=f"<@{user_id}>", inline=True)
+    embed.add_field(name="ID Utilisateur", value=f"`{user_id}`", inline=True)
+    embed.add_field(name="Banni par", value=f"{ban['banned_by_name']} (<@{ban['banned_by_id']}>)", inline=False)
+    embed.add_field(name="Date du ban", value=f"`{ban['banned_at']}`", inline=True)
+    embed.add_field(name="Raison spécifiée", value=f"*{ban['reason']}*", inline=False)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="vestige", description="Consulter l'historique complet des sanctions d'un utilisateur.")
+@app_commands.autocomplete(user_id=ban_autocomplete)
+@app_commands.describe(user_id="L'utilisateur à vérifier (sélectionne ou entre un ID)")
+@app_commands.checks.has_permissions(ban_members=True)
+async def vestige(interaction: discord.Interaction, user_id: str):
+    await interaction.response.defer()
+    
+    # Récupération de l'historique complet
+    history = Database.get_user_history(interaction.guild.id, user_id)
+    
+    try:
+        user = await bot.fetch_user(int(user_id))
+        username = user.name
+        avatar_url = user.display_avatar.url if user.display_avatar else None
+    except:
+        username = history[0]['real_username'] if history else "Utilisateur Inconnu"
+        avatar_url = None
+
+    if not history:
+        return await interaction.followup.send(f"Aucun historique de bannissement trouvé pour **{username}** (`{user_id}`).", ephemeral=True)
+    
+    total_bans = len(history)
+    active_ban = next((b for b in history if b['is_active'] == 1), None)
+    
+    embed = discord.Embed(
+        title=f"📜 Historique de Modération — {username}",
+        description=f"**ID :** `{user_id}`\n**Nombre total de bans :** `{total_bans}`\n**Statut actuel :** {'🔴 Actuellement banni' if active_ban else '🟢 Non banni'}",
+        color=discord.Color.orange(),
+        timestamp=datetime.now()
+    )
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+        
+    # On affiche les 5 sanctions les plus récentes pour éviter de dépasser la limite de caractères de Discord
+    for i, ban in enumerate(history[:5], 1):
+        status_str = "🔴 [Toujours Actif]" if ban['is_active'] == 1 else "🟢 [Débanni]"
+        
+        ban_details = f"**Banni le :** `{ban['banned_at']}` par {ban['banned_by_name']}\n"
+        ban_details += f"└ **Raison du ban :** *{ban['reason']}*\n"
+        
+        if ban['is_active'] == 0 and ban['unbanned_at']:
+            ban_details += f"└ **Débanni le :** `{ban['unbanned_at']}` par {ban['unbanned_by_name']}\n"
+            ban_details += f"└ **Raison du déban :** *{ban['unban_reason'] or 'Aucune raison'}*\n"
+            
+        # Le calcul (total_bans - i + 1) permet d'afficher le bon numéro d'ordre (ex: Sanction #1, Sanction #2...)
+        embed.add_field(
+            name=f"Sanction #{total_bans - i + 1} {status_str}",
+            value=ban_details,
+            inline=False
+        )
+        
+    if total_bans > 5:
+        embed.set_footer(text=f"Affichage des 5 bans les plus récents sur un total de {total_bans}.")
+        
+    await interaction.followup.send(embed=embed)
 
 bot.run(TOKEN)
