@@ -1,4 +1,4 @@
-import discord, json, os
+import discord, json, os, asyncio
 from discord import app_commands
 from discord.ext import commands
 from src.db import Database, Utils
@@ -269,7 +269,9 @@ class LoggingSystemCog(commands.Cog):
         for channel in interaction.guild.text_channels:
             try:
                 async for msg in channel.history(limit=fetch_limit):
-                    Database.log_message(
+                    # On envoie l'écriture SQL synchrone dans un thread séparé
+                    await asyncio.to_thread(
+                        Database.log_message,
                         guild_id=msg.guild.id,
                         channel_id=msg.channel.id,
                         message_id=msg.id,
