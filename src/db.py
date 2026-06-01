@@ -68,6 +68,68 @@ class Database:
                     )
                 """)
 
+                # --- NOUVELLES TABLES DE LOGS UNIVERSELS ---
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS MessageLogs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        channel_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL,
+                        author_id TEXT NOT NULL,
+                        author_type TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        content TEXT,
+                        old_content TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_msg_guild ON MessageLogs(guild_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_msg_author ON MessageLogs(author_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_msg_message ON MessageLogs(message_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS ModerationLogs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        action_type TEXT NOT NULL,
+                        target_id TEXT NOT NULL,
+                        actor_id TEXT NOT NULL,
+                        reason TEXT,
+                        details TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_mod_guild ON ModerationLogs(guild_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_mod_target ON ModerationLogs(target_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS GuildEntitiesLogs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        entity_type TEXT NOT NULL, -- 'ROLE' ou 'CHANNEL'
+                        entity_id TEXT NOT NULL,
+                        action TEXT NOT NULL, -- 'CREATE', 'UPDATE', 'DELETE'
+                        name TEXT,
+                        extra_data TEXT, -- JSON avec permissions, type, etc.
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_entity_guild ON GuildEntitiesLogs(guild_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_entity_id ON GuildEntitiesLogs(entity_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS MemberStateLogs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        action TEXT NOT NULL, -- 'ROLE_ADD', 'ROLE_REMOVE', 'NICKNAME_CHANGE'
+                        details TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_state_guild ON MemberStateLogs(guild_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_state_user ON MemberStateLogs(user_id)")
+
                 con.commit() # commit permet de valider nos modifications
                 res = cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Alert'") # Permet de verifier
 
@@ -332,6 +394,89 @@ class Database:
         except sqlite3.Error as e:
             print(f"Erreur SQLite (get_user_history) : {e}")
             return []
+
+    # --- LOGGING METHODS ---
+    def log_message(guild_id, channel_id, message_id, author_id, author_type, action, content, old_content=None):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO MessageLogs (guild_id, channel_id, message_id, author_id, author_type, action, content, old_content, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (str(guild_id), str(channel_id), str(message_id), str(author_id), author_type, action, content, old_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (log_message) : {e}")
+
+    def log_moderation(guild_id, action_type, target_id, actor_id, reason, details=""):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO ModerationLogs (guild_id, action_type, target_id, actor_id, reason, details, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (str(guild_id), action_type, str(target_id), str(actor_id), reason, details, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (log_moderation) : {e}")
+
+    def log_guild_entity(guild_id, entity_type, entity_id, action, name, extra_data=""):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO GuildEntitiesLogs (guild_id, entity_type, entity_id, action, name, extra_data, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (str(guild_id), entity_type, str(entity_id), action, name, extra_data, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (log_guild_entity) : {e}")
+
+    def log_member_state(guild_id, user_id, action, details=""):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO MemberStateLogs (guild_id, user_id, action, details, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (str(guild_id), str(user_id), action, details, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (log_member_state) : {e}")
+
+    def get_user_full_report(guild_id, user_id):
+        # Récupère tous les logs pour un user_id donné
+        try:
+            report = {}
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                
+                # Member info
+                cur.execute("SELECT * FROM Members WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
+                member = cur.fetchone()
+                report['member_info'] = dict(member) if member else None
+                
+                # Messages limités pour ne pas faire crash
+                cur.execute("SELECT * FROM MessageLogs WHERE guild_id = ? AND author_id = ? ORDER BY timestamp DESC LIMIT 500", (str(guild_id), str(user_id)))
+                report['recent_messages'] = [dict(row) for row in cur.fetchall()]
+                
+                # Moderation (as target)
+                cur.execute("SELECT * FROM ModerationLogs WHERE guild_id = ? AND target_id = ? ORDER BY timestamp DESC", (str(guild_id), str(user_id)))
+                report['moderation_history'] = [dict(row) for row in cur.fetchall()]
+
+                # Moderation (as actor)
+                cur.execute("SELECT * FROM ModerationLogs WHERE guild_id = ? AND actor_id = ? ORDER BY timestamp DESC", (str(guild_id), str(user_id)))
+                report['actions_performed'] = [dict(row) for row in cur.fetchall()]
+
+                # State changes
+                cur.execute("SELECT * FROM MemberStateLogs WHERE guild_id = ? AND user_id = ? ORDER BY timestamp DESC", (str(guild_id), str(user_id)))
+                report['state_changes'] = [dict(row) for row in cur.fetchall()]
+
+                return report
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_user_full_report) : {e}")
+            return None
 
 class Utils:
     async def get_image_hash(attachment):
