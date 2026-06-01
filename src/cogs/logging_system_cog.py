@@ -3,6 +3,10 @@ from discord import app_commands
 from discord.ext import commands
 from src.db import Database, Utils
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+load_dotenv()
+DEV_ID = int(os.getenv('DEV_ID', 0))
 
 class LoggingSystemCog(commands.Cog):
     def __init__(self, bot):
@@ -240,8 +244,12 @@ class LoggingSystemCog(commands.Cog):
 
     @app_commands.command(name="sync_history", description="Synchronise les anciens messages des salons textuels dans la base de données")
     @app_commands.describe(limit="Nombre de messages par salon (laisser vide = tout récupérer)")
-    @app_commands.checks.has_permissions(administrator=True)
     async def sync_history(self, interaction: discord.Interaction, limit: int = None):
+        if interaction.user.id != DEV_ID and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "❌ Vous n'avez pas les permissions nécessaires (Administrateur ou Développeur requis).", 
+                ephemeral=True
+            )
         if limit is not None:
             desc = f"limite: {limit} msg/salon"
             fetch_limit = limit
