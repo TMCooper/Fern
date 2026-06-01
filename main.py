@@ -63,14 +63,21 @@ async def on_member_update(before, after):
         Database.upsert_member(after.guild.id, after.id, after.name, after.display_name)
 
 @bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingPermissions):
-        if not interaction.response.is_done():
-            await interaction.response.send_message("Vous n'avez pas les permissions nécessaires pour utiliser cette commande.", ephemeral=True)
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        message_text = "❌ Vous n'avez pas les permissions nécessaires pour utiliser cette commande."
     else:
-        print(f"Erreur d'application : {error}")
-        if not interaction.response.is_done():
-            await interaction.response.send_message("Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
+        message_text = f"❌ Une erreur est survenue : {error}"
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message_text, ephemeral=True)
+        else:
+            await interaction.response.send_message(message_text, ephemeral=True)
+    except discord.errors.NotFound:
+        print(f"⚠️ Impossible d'envoyer la réponse à l'interaction : elle a expiré (plus de 3 secondes).")
+    except Exception as e:
+        print(f"Erreur imprévue dans le gestionnaire d'erreurs : {e}")
 
 if __name__ == '__main__':
     bot.run(TOKEN)
