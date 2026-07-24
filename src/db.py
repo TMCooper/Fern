@@ -243,18 +243,19 @@ class Database:
             return 1
 
     def url_lookup(message):
-        models = r'(https?://\S+)'
+        models = r'(https?://[^\s<>]+)' 
         resultats = re.findall(models, message)
         
         if resultats:
-            # MODIFICATION 4 : On ouvre la base de données UNE fois, puis on boucle
             with sqlite3.connect(Database.PATH_DB) as con:
                 cur = con.cursor()
+                # On vérifie chaque lien trouvé dans le message
                 for url in resultats:
                     cur.execute("SELECT * FROM UrlBanned WHERE url = ?", (url,))
                     res = cur.fetchall()
                     if res:
-                        return True # Dès qu'un lien interdit est trouvé, on retourne True
+                        # Dès qu'un seul lien du message est dans la DB, on retourne True
+                        return True 
         return False
         
     def database_lookup(id_server, message_content, attachment_hash):
