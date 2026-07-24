@@ -60,6 +60,24 @@ class UtilsCog(commands.Cog):
             error_msg = "Accès refusé ou aucune donnée trouvée."
             await interaction.followup.send(error_msg)
 
+    @app_commands.command(name="url_database", description="Recupère les log des url suprimer sur le server")
+    async def url_database(self, interaction: discord.Interaction):
+        if interaction.user.id != DEV_ID:
+            return await interaction.response.send_message("Vous n'avez pas les permissions pour executer cette commande", ephemeral=True)
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        filename = Database.urlbanned_show(interaction.guild.id, interaction.user.id, DEV_ID)
+
+        if isinstance(filename, str) and os.path.exists(filename):
+            await interaction.followup.send(
+                content="Voici l'export des urls :", 
+                file=discord.File(filename)
+            )
+            os.remove(filename)
+        else:
+            error_msg = "Accès refusé ou aucune donnée trouvée."
+            await interaction.followup.send(error_msg)
+
     @app_commands.command(name="help", description="Affiche la liste de toutes les commandes et les permissions requises")
     async def help_command(self, interaction: discord.Interaction):
         embed = discord.Embed(
@@ -77,6 +95,7 @@ class UtilsCog(commands.Cog):
             "`/vestige` — Historique complet des sanctions d'un membre\n"
             "`/ban_texte` — Ajouter un texte interdit manuellement\n"
             "` Bannir et Supprimer ` — Menu contextuel (clic droit sur un message)"
+            "` Supprimer et Archiver l'url ` — Menu contextuel (clic droit sur un message)"
         )
         embed.add_field(name="🔨 Modération — `Ban Members` / `Manage Messages`", value=mod_cmds, inline=False)
 
@@ -114,6 +133,7 @@ class UtilsCog(commands.Cog):
         dev_cmds = (
             "`/sql` — Exécuter une commande SQL\n"
             "`/logdata` — Exporter les données de log"
+            "`/url_database` — Récupère l'export des URL bloquées sur le serveur"
         )
         embed.add_field(name="🔒 Développeur uniquement", value=dev_cmds, inline=False)
 

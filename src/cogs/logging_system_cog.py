@@ -37,9 +37,36 @@ class LoggingSystemCog(commands.Cog):
     # --- MESSAGE EVENTS ---
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.guild is None:
+        if message.guild is None or message.author.bot:
             return
+
+        urlCheck = Database.url_lookup(message.content)
+        if urlCheck is True:
+            try:
+                await message.delete()
+            except discord.NotFound:
+                pass # Le message est peut-être déjà supprimé
+                
+            try:
+                with open("config.json", "r") as f:
+                    config = json.load(f)
+                    serv_id = str(message.guild.id)
+                    if serv_id in config and "channel_id" in config[serv_id]:
+                        conf = config[serv_id]
+                        target_channel = self.bot.get_channel(conf["channel_id"])
+                        role_ping = f"<@&{conf['role_id']}>"
+                        if target_channel:
+                            await target_channel.send(
+                                f"{role_ping} **Contenu supprimé**\n"
+                                f"**Auteur :** {message.author.mention} (`{message.author.id}`)\n"
+                                f"**Salon :** {message.channel.mention}\n"
+                            )
+            except Exception as e:
+                print(f"Erreur config on_message: {e}")
             
+            # Si le message a été supprimé à cause de l'URL, pas besoin de checker l'image
+            return 
+        
         # Old code logic for checking duplicates
         current_hash = None
         if message.attachments:
@@ -60,7 +87,7 @@ class LoggingSystemCog(commands.Cog):
                     if target_channel:
                         jump_link = message.jump_url
                         await target_channel.send(
-                            f"{role_ping} **Contenue déjà supprimé**\n"
+                            f"{role_ping} **Contenu déjà supprimé**\n"
                             f"**Auteur :** {message.author.mention} (`{message.author.id}`)\n"
                             f"**Salon :** {message.channel.mention}\n"
                             f"**Action :** [Cliquer ici pour voir le message]({jump_link})"

@@ -1,4 +1,4 @@
-import os, sqlite3, hashlib, json
+import os, sqlite3, hashlib, json, re
 from datetime import datetime
 
 class Database:
@@ -130,6 +130,18 @@ class Database:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_state_guild ON MemberStateLogs(guild_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_state_user ON MemberStateLogs(user_id)")
 
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS UrlBanned (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        author_id TEXT NOT NULL,
+                        moderator_id TEXT NOT NULL,
+                        url TEXT,
+                        timestamp TEXT NOT NULL,
+                        UNIQUE(guild_id, url)
+                    )
+                """)
+
                 con.commit() # commit permet de valider nos modifications
                 res = cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Alert'") # Permet de verifier
 
@@ -190,6 +202,60 @@ class Database:
         except sqlite3.Error as e:
             print(f"Une erreur SQLite : {e}")
             return 1
+
+    def urlbanned_show(guild_id, asker_id, DEV_ID):
+        if asker_id != DEV_ID:
+            return 1
+
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+
+                cur.execute(
+                    "SELECT * FROM UrlBanned WHERE guild_id = ?",
+                    (guild_id,)
+                )
+                res = cur.fetchall()
+
+                if not res:
+                    return "Aucune donnée"
+
+                filename = f"urlbanned_export_{guild_id}.json"
+
+                export_data = []
+                for row in res:
+                    export_data.append({
+                        "id": row[0],
+                        "guild_id": row[1],
+                        "author_id": row[2],
+                        "moderator_id": row[3],
+                        "url": row[4],
+                        "timestamp": row[5]
+                    })
+
+                with open(filename, "w", encoding="utf-8") as f:
+                    json.dump(export_data, f, indent=4, ensure_ascii=False)
+
+                return filename
+
+        except sqlite3.Error as e:
+            print(f"Une erreur SQLite : {e}")
+            return 1
+
+    def url_lookup(message):
+        models = r'(https?://\S+)'
+        resultats = re.findall(models, message)
+        
+        if resultats:
+            # MODIFICATION 4 : On ouvre la base de données UNE fois, puis on boucle
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                for url in resultats:
+                    cur.execute("SELECT * FROM UrlBanned WHERE url = ?", (url,))
+                    res = cur.fetchall()
+                    if res:
+                        return True # Dès qu'un lien interdit est trouvé, on retourne True
+        return False
         
     def database_lookup(id_server, message_content, attachment_hash):
         try:
@@ -477,6 +543,17 @@ class Database:
         except sqlite3.Error as e:
             print(f"Erreur SQLite (get_user_full_report) : {e}")
             return None
+
+    def ban_url(guild_id, author_id, moderator_id, url):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""INSERT OR IGNORE INTO UrlBanned (guild_id, author_id, moderator_id, url, timestamp) VALUES (?, ?, ?, ?, ?)""", 
+                            (str(guild_id), str(author_id), moderator_id, url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+                return True, "Url bien archivé"
+        except sqlite3.Error as e:
+                    print(f"Erreur SQLite (log_member_state) : {e}")
 
 class Utils:
     async def get_image_hash(attachment):

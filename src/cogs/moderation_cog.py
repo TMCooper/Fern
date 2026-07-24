@@ -1,4 +1,4 @@
-import discord, os, json, random
+import discord, os, json, random, re
 from discord import app_commands
 from discord.ext import commands
 from src.db import Database, Utils
@@ -37,6 +37,43 @@ class ModerationCog(commands.Cog):
             callback=self.ban_and_delete,
         )
         self.bot.tree.add_command(self.ban_and_delete_ctx_menu)
+
+        self.archive_url_and_delete_ctx_menu = app_commands.ContextMenu(
+                    name="Supprimer et Achiver l'url",
+                    callback=self.archive_and_delete,
+        )
+        self.bot.tree.add_command(self.archive_url_and_delete_ctx_menu)
+
+    async def archive_and_delete(self, interaction: discord.Interaction, message: discord.Message):
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("Vous n'avez pas la permission de faire cela.", ephemeral=True)
+
+        # Ajout du 'r' devant la regex et du '?' pour capturer http et https
+        models = r'(https?://\S+)' 
+        resultats = re.findall(models, message.content) # Attention: c'est message.content, pas message tout court
+        
+        if resultats:
+            ajouts_reussis = 0
+            
+            for url in resultats:
+                success, msg = Database.ban_url(
+                    str(message.guild.id), 
+                    str(message.author.id), 
+                    str(interaction.user.id), 
+                    url
+                )
+                if success:
+                    ajouts_reussis += 1
+            
+            try:
+                await message.delete()
+                await interaction.response.send_message(f"Le message a été supprimé et {ajouts_reussis} lien(s) ajouté(s) à la base de données.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("Les liens ont été ajoutés, mais je n'ai pas la permission de supprimer le message.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"Erreur lors de la suppression : {e}", ephemeral=True)
+        else:
+            return await interaction.response.send_message("Le message que vous tentez de supprimer ne contient pas de lien", ephemeral=True)
 
     async def cog_unload(self):
         self.bot.tree.remove_command(self.ban_and_delete_ctx_menu.name, type=self.ban_and_delete_ctx_menu.type)
