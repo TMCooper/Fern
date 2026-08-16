@@ -142,6 +142,38 @@ class Database:
                     )
                 """)
 
+                # --- TABLES ROULETTE / TALENTS ---
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS RouletteSettings (
+                        guild_id TEXT PRIMARY KEY,
+                        max_roll INTEGER DEFAULT 19,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS RouletteTalents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        number INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        role_id TEXT,
+                        UNIQUE(guild_id, number)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS RouletteHistory (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        roll_value INTEGER NOT NULL,
+                        talent_name TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_roulette_guild ON RouletteTalents(guild_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_roulette_hist_guild ON RouletteHistory(guild_id)")
+
                 con.commit() # commit permet de valider nos modifications
                 res = cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Alert'") # Permet de verifier
 
@@ -555,6 +587,152 @@ class Database:
                 return True, "Url bien archivé"
         except sqlite3.Error as e:
                     print(f"Erreur SQLite (log_member_state) : {e}")
+
+    # --- MÉTHODES ROULETTE & TALENTS ---
+    DEFAULT_TALENTS = [
+        (1, "💪 Force décuplée", "Vous êtes très endurant et avez des muscles capables de soulever une bonne centaine de kilos à bout de bras même si votre carrure ne semble pas vous en donner les capacités. Attention lorsque vous serrez la main aux autres personnes de l'académie."),
+        (2, "🥀 Système immunitaire renforcé", "Vous êtes totalement insensible aux poisons. Vous ne tombez jamais malade."),
+        (3, "🔥 Berserk", "Plus vous êtes en mauvais état physique et plus vos pouvoirs augmentent, pouvant jusqu'à doubler s'il vous manque plusieurs membres. Votre détermination vous permet de faire face à l'adversité avec plus de courage que la majorité des autres personnes de votre grade. N'oubliez cependant pas que vous n'êtes pas immortel, et que des blessures graves peuvent entraîner votre décès."),
+        (4, "🦥 Sans talent", "Vous n'avez hélas pas de talent particulier. Vous pouvez toujours essayer d'implorer les fondateurs. (Ça ne hard carry pas, ne vous en faites pas !)"),
+        (5, "🛜 Transmission de pensées", "Vous avez la capacité de communiquer par télépathie avec les personnes de votre choix qui se situent à moins de 50 mètres de vous, mais pas à plus de trois autres personnes à la fois. Ce talent ne sert qu'à envoyer des pensées, pas à en recevoir ou en écouter."),
+        (6, "⌛ Maîtrise économe", "Vous avez deux points de DAG supplémentaire, ce qui vous permet d'utiliser vos pouvoirs plus longtemps."),
+        (7, "👄 Mégapolyglotte", "Vous avez la capacité de parler et comprendre n'importe quelle langue de façon purement instinctive, y compris celle des animaux."),
+        (8, "🐾 Familier inné", "Vous êtes en capacité d'invoquer un familier lorsque vous le souhaitez. Les familiers ne peuvent pas être humains. Pensez à l'ajouter à votre fiche et à le faire valider."),
+        (9, "👻 Invisibilité discrète", "Tant que vous retenez votre souffle, vous êtes invisible (mais pas vos habits). Qu'allez-vous faire de ce talent ?"),
+        (10, "🗡 Invocation d'objet", "Vous êtes en capacité de faire apparaître ou disparaître un seul et unique objet. Pensez à le mettre dans votre fiche et à le faire valider."),
+        (11, "🌀 Respiration augmentée", "Vous pouvez cependant rester sous l'eau une trentaine de minutes sans respirer et vous mouvoir sans consommer plus d'oxygène que si vous étiez immobile. Cette capacité vous donne également un très bon souffle sur terre."),
+        (12, "✋ Toucher augmenté", "Ce talent vous permet de ressentir aisément les vibrations des choses que vous touchez comme celles du sol. Il vous procure aussi de façon général un meilleur toucher."),
+        (13, "📏 Élasticité", "Vos cinq membres ont la faculté de s'allonger légèrement (d'une quarantaine de centimètres), ce qui vous permet d'avoir plus d'allonge sans toutefois influer sur vos capacités physiques."),
+        (14, "🍀 Lucky Luke", "Hola cowboy ! Vous êtes naturellement très chanceux. Lorsque vous effectuez un roll inrp ou pour obtenir un talent, vous pouvez le faire deux fois et choisir le résultat que vous préférez (celui-ci ne compte pas, il vous est attribué de suite)."),
+        (15, "🐙 Agilité boostée", "Votre souplesse, votre vitesse et votre agilité sont hors du commun. Les personnes de votre grade ou moins ont énormément de mal à suivre vos mouvements. Vous vous déplacez à une vitesse impressionnante et pouvez effectuer les acrobaties les plus improbables sans mal."),
+        (16, "🐰 Ouïe amplifiée", "Ce talent vous permet d'entendre bien plus aisément les bruits qui vous entourent et vous permet également de les distinguer les uns des autres. Cela veut dire que vous pouvez, par exemple, entendre des sons provenant de plus loin. En revanche, ce talent est accompagné d'une plus grande vulnérabilité aux bruits forts."),
+        (17, "👀 Vision accrue", "Vos yeux ont une facilité déconcertante à suivre les mouvements des autres en plus d'avoir une acuité d'environ 25/10."),
+        (18, "🐘 Sniffeur", "Votre odorat est surdéveloppé, vous permettant d'identifier très facilement une personne à son odeur et de différencier les odeurs qui vous entourent. Vous pouvez également sentir des odeurs moins concentrées dans l'air."),
+        (19, "⚡ Hacker", "Vous possédez des compétences informatiques hors du commun.")
+    ]
+
+    def get_roulette_max_roll(guild_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("SELECT max_roll FROM RouletteSettings WHERE guild_id = ?", (str(guild_id),))
+                row = cur.fetchone()
+                return row[0] if row else 19
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_roulette_max_roll) : {e}")
+            return 19
+
+    def set_roulette_max_roll(guild_id, max_roll):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO RouletteSettings (guild_id, max_roll, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        max_roll = excluded.max_roll,
+                        updated_at = excluded.updated_at
+                """, (str(guild_id), int(max_roll), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (set_roulette_max_roll) : {e}")
+            return False
+
+    def get_talent(guild_id, number):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("SELECT * FROM RouletteTalents WHERE guild_id = ? AND number = ?", (str(guild_id), int(number)))
+                row = cur.fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_talent) : {e}")
+            return None
+
+    def get_all_talents(guild_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("SELECT * FROM RouletteTalents WHERE guild_id = ? ORDER BY number ASC", (str(guild_id),))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_all_talents) : {e}")
+            return []
+
+    def set_talent(guild_id, number, name, description, role_id=None):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                role_id_str = str(role_id) if role_id else None
+                cur.execute("""
+                    INSERT INTO RouletteTalents (guild_id, number, name, description, role_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(guild_id, number) DO UPDATE SET
+                        name = excluded.name,
+                        description = excluded.description,
+                        role_id = excluded.role_id
+                """, (str(guild_id), int(number), name, description, role_id_str))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (set_talent) : {e}")
+            return False
+
+    def delete_talent(guild_id, number):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("DELETE FROM RouletteTalents WHERE guild_id = ? AND number = ?", (str(guild_id), int(number)))
+                con.commit()
+                return cur.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (delete_talent) : {e}")
+            return False
+
+    def init_default_talents(guild_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                # Configurer max_roll à 19
+                cur.execute("""
+                    INSERT INTO RouletteSettings (guild_id, max_roll, updated_at)
+                    VALUES (?, 19, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        max_roll = 19,
+                        updated_at = excluded.updated_at
+                """, (str(guild_id), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                
+                # Inserer/Mettre à jour les 19 talents par défaut
+                for num, name, desc in Database.DEFAULT_TALENTS:
+                    cur.execute("""
+                        INSERT INTO RouletteTalents (guild_id, number, name, description, role_id)
+                        VALUES (?, ?, ?, ?, NULL)
+                        ON CONFLICT(guild_id, number) DO UPDATE SET
+                            name = excluded.name,
+                            description = excluded.description
+                    """, (str(guild_id), num, name, desc))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (init_default_talents) : {e}")
+            return False
+
+    def log_roulette_roll(guild_id, user_id, roll_value, talent_name):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO RouletteHistory (guild_id, user_id, roll_value, talent_name, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (str(guild_id), str(user_id), int(roll_value), talent_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (log_roulette_roll) : {e}")
+            return False
 
 class Utils:
     async def get_image_hash(attachment):

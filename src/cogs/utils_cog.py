@@ -103,8 +103,8 @@ class UtilsCog(commands.Cog):
         config_cmds = (
             "`/setup_alerts` — Configurer le salon et rôle d'alertes\n"
             "`/setup_logs` — Configurer le salon de logs publics\n"
-            "`/champignon_setup` — Configurer la loterie champignon\n"
-            "`/roulette_setup` — Configurer la roulette"
+            "`/roulette_setup` / `/champignon_setup` — Configurer le rôle cible pour la loterie membres\n"
+            "`/setup_talents` — Configurer la roulette des talents (0 à N, noms, descriptions, rôles)"
         )
         embed.add_field(name="⚙️ Configuration — `Manage Server`", value=config_cmds, inline=False)
 
@@ -115,12 +115,12 @@ class UtilsCog(commands.Cog):
         )
         embed.add_field(name="📊 Logs & Audit — `Administrateur`", value=log_cmds, inline=False)
 
-        # --- Fun ---
+        # --- Fun & Jeux ---
         fun_cmds = (
-            "`/champignon` — Tirer au sort un gagnant (loterie)\n"
-            "`/roulette` — Tirer au sort un membre et le mentionner"
+            "`/roulette` / `/champignon` — Tirer au sort un membre au hasard parmi le rôle configuré\n"
+            "`/roll_talent` (`/talent_roulette`) — Lancer la roulette des talents (chiffre 0 à N, description & rôle)"
         )
-        embed.add_field(name="🎲 Fun — `Manage Server` / `Manage Messages`", value=fun_cmds, inline=False)
+        embed.add_field(name="🎲 Fun & Jeux — Tous les membres", value=fun_cmds, inline=False)
 
         # --- Utilitaires ---
         util_cmds = (
