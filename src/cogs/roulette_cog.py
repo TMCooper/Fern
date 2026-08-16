@@ -214,9 +214,5 @@ class RouletteCog(commands.Cog):
     async def roll_talent(self, interaction: discord.Interaction):
         await self._execute_roll(interaction)
 
-    @app_commands.command(name="talent_roulette", description="Faire tourner la roulette pour obtenir un chiffre et son talent (0 à N)")
-    async def talent_roulette(self, interaction: discord.Interaction):
-        await self._execute_roll(interaction)
-
 async def setup(bot: commands.Bot):
     await bot.add_cog(RouletteCog(bot))

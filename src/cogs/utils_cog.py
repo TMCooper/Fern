@@ -118,7 +118,7 @@ class UtilsCog(commands.Cog):
         # --- Fun & Jeux ---
         fun_cmds = (
             "`/roulette` / `/champignon` — Tirer au sort un membre au hasard parmi le rôle configuré\n"
-            "`/roll_talent` (`/talent_roulette`) — Lancer la roulette des talents (chiffre 0 à N, description & rôle)"
+            "`/roll_talent` — Lancer la roulette des talents (chiffre 0 à N, description & rôle)"
         )
         embed.add_field(name="🎲 Fun & Jeux — Tous les membres", value=fun_cmds, inline=False)
 
