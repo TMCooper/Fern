@@ -4,29 +4,50 @@ from discord import app_commands
 from discord.ext import commands
 from src.db import Database
 
+async def rolled_members_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    if not interaction.guild:
+        return []
+    guild_id = interaction.guild.id
+    members = Database.get_rolled_members(guild_id, current)
+    choices = []
+    for m in members:
+        display_name = m['display_name']
+        username = m['username']
+        label = f"{display_name} (@{username})" if display_name != username else username
+        choices.append(app_commands.Choice(name=label[:100], value=str(m['user_id'])))
+    return choices[:25]
+
 class RouletteCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     setup_group = app_commands.Group(name="setup_talents", description="Configuration de la roulette des talents (Admins)")
 
-    @setup_group.command(name="init_defaults", description="Initialise les 19 talents par défaut et règle la limite max à 19")
-    async def setup_init_defaults(self, interaction: discord.Interaction):
+    @setup_group.command(name="grant_reroll", description="Autorise un membre ayant déjà fait son tirage à effectuer un reroll")
+    @app_commands.describe(membre="Le membre à qui accorder un reroll")
+    @app_commands.autocomplete(membre=rolled_members_autocomplete)
+    async def setup_grant_reroll(self, interaction: discord.Interaction, membre: str):
         if not interaction.guild:
             return await interaction.response.send_message("❌ Cette commande doit être exécutée dans un serveur.", ephemeral=True)
         if not interaction.user.guild_permissions.administrator and not interaction.user.guild_permissions.manage_guild:
-            return await interaction.response.send_message("❌ Vous n'avez pas la permission de configurer la roulette.", ephemeral=True)
+            return await interaction.response.send_message("❌ Vous n'avez pas la permission d'accorder un reroll.", ephemeral=True)
 
-        success = Database.init_default_talents(interaction.guild.id)
+        try:
+            target_user_id = int(membre)
+        except ValueError:
+            return await interaction.response.send_message("❌ ID de membre invalide.", ephemeral=True)
+
+        success = Database.reset_user_roll(interaction.guild.id, target_user_id)
         if success:
+            target_member = interaction.guild.get_member(target_user_id)
+            user_mention = target_member.mention if target_member else f"<@{target_user_id}>"
             await interaction.response.send_message(
-                "✅ **Roulette des talents initialisée avec succès !**\n"
-                "Les 19 talents par défaut ont été chargés et le roll max est configuré sur **19**.\n"
-                "Vous pouvez à tout moment modifier ou ajouter un rôle Discord à un talent avec `/setup_talents set_talent`.",
+                f"✅ **Reroll accordé avec succès à {user_mention} !**\n"
+                f"Ce membre peut à nouveau lancer la commande `/roll_talent`.",
                 ephemeral=True
             )
         else:
-            await interaction.response.send_message("❌ Erreur lors de l'initialisation des talents par défaut.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Ce membre n'avait aucun tirage enregistré dans l'historique.", ephemeral=True)
 
     @setup_group.command(name="set_max", description="Définit le chiffre maximum (roll de 0 à N) pour la roulette")
     @app_commands.describe(max_val="Le chiffre maximum N pour les tirages (ex: 19)")
@@ -110,7 +131,7 @@ class RouletteCog(commands.Cog):
         if not talents:
             return await interaction.response.send_message(
                 f"ℹ️ Aucun talent n'est actuellement configuré sur ce serveur (Roll max : 0 à {max_roll}).\n"
-                f"Utilisez `/setup_talents init_defaults` pour charger les 19 talents par défaut.",
+                f"Utilisez `/setup_talents set_talent` pour ajouter vos talents.",
                 ephemeral=True
             )
 
@@ -136,6 +157,15 @@ class RouletteCog(commands.Cog):
             return await interaction.response.send_message("❌ Cette commande doit être utilisée dans un serveur.", ephemeral=True)
 
         guild_id = str(interaction.guild.id)
+
+        # Empêcher les membres d'effectuer plusieurs tirages
+        if Database.has_user_rolled(guild_id, interaction.user.id):
+            return await interaction.response.send_message(
+                "❌ **Vous avez déjà effectué votre tirage de roulette sur ce serveur !**\n"
+                "Seul un membre du staff peut vous accorder un reroll via `/setup_talents grant_reroll`.",
+                ephemeral=True
+            )
+
         max_roll = Database.get_roulette_max_roll(guild_id)
         roll = random.randint(0, max_roll)
 

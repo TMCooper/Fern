@@ -734,6 +734,50 @@ class Database:
             print(f"Erreur SQLite (log_roulette_roll) : {e}")
             return False
 
+    def has_user_rolled(guild_id, user_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("SELECT id FROM RouletteHistory WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
+                return cur.fetchone() is not None
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (has_user_rolled) : {e}")
+            return False
+
+    def reset_user_roll(guild_id, user_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("DELETE FROM RouletteHistory WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
+                con.commit()
+                return cur.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (reset_user_roll) : {e}")
+            return False
+
+    def get_rolled_members(guild_id, query=""):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                sql = """
+                    SELECT DISTINCT RouletteHistory.user_id,
+                           COALESCE(Members.username, 'Utilisateur ' || RouletteHistory.user_id) as username,
+                           COALESCE(Members.display_name, Members.username, 'Utilisateur ' || RouletteHistory.user_id) as display_name
+                    FROM RouletteHistory
+                    LEFT JOIN Members ON RouletteHistory.guild_id = Members.guild_id AND RouletteHistory.user_id = Members.user_id
+                    WHERE RouletteHistory.guild_id = ?
+                """
+                if query:
+                    sql += " AND (Members.username LIKE ? OR Members.display_name LIKE ? OR RouletteHistory.user_id LIKE ?)"
+                    cur.execute(sql + " LIMIT 25", (str(guild_id), f"%{query}%", f"%{query}%", f"%{query}%"))
+                else:
+                    cur.execute(sql + " LIMIT 25", (str(guild_id),))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_rolled_members) : {e}")
+            return []
+
 class Utils:
     async def get_image_hash(attachment):
         try:
