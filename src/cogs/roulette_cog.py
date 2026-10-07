@@ -29,7 +29,17 @@ class RouletteCog(commands.Cog):
     async def setup_grant_reroll(self, interaction: discord.Interaction, membre: str):
         if not interaction.guild:
             return await interaction.response.send_message("❌ Cette commande doit être exécutée dans un serveur.", ephemeral=True)
-        if not interaction.user.guild_permissions.administrator and not interaction.user.guild_permissions.manage_guild:
+        # Vérification des permissions : administrateurs ou membres ayant le rôle reroll configuré
+        is_admin = interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
+        reroll_role_id = Database.get_reroll_role_id(interaction.guild.id)
+        has_reroll_role = False
+        if reroll_role_id:
+            try:
+                has_reroll_role = any(r.id == int(reroll_role_id) for r in getattr(interaction.user, 'roles', []))
+            except (ValueError, TypeError):
+                has_reroll_role = False
+
+        if not is_admin and not has_reroll_role:
             return await interaction.response.send_message("❌ Vous n'avez pas la permission d'accorder un reroll.", ephemeral=True)
 
         try:
@@ -48,6 +58,33 @@ class RouletteCog(commands.Cog):
             )
         else:
             await interaction.response.send_message("⚠️ Ce membre n'avait aucun tirage enregistré dans l'historique.", ephemeral=True)
+
+    @setup_group.command(name="set_reroll_role", description="Définit le rôle autorisé à accorder un reroll (/setup_talents grant_reroll)")
+    @app_commands.describe(role="Le rôle autorisé à accorder des rerolls (laisser vide pour réinitialiser)")
+    async def setup_set_reroll_role(self, interaction: discord.Interaction, role: discord.Role = None):
+        if not interaction.guild:
+            return await interaction.response.send_message("❌ Cette commande doit être exécutée dans un serveur.", ephemeral=True)
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Seul un administrateur peut configurer ce rôle.", ephemeral=True)
+
+        if role:
+            success = Database.set_reroll_role_id(interaction.guild.id, role.id)
+            if success:
+                await interaction.response.send_message(
+                    f"✅ Les membres possédant le rôle {role.mention} sont désormais autorisés à accorder des rerolls via `/setup_talents grant_reroll`.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Erreur lors de l'enregistrement du rôle reroll.", ephemeral=True)
+        else:
+            success = Database.set_reroll_role_id(interaction.guild.id, None)
+            if success:
+                await interaction.response.send_message(
+                    "🔄 Le rôle autorisé pour accorder un reroll a été réinitialisé. Seuls les administrateurs peuvent désormais accorder des rerolls.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Erreur lors de la réinitialisation du rôle reroll.", ephemeral=True)
 
     @setup_group.command(name="set_max", description="Définit le chiffre maximum (roll de 0 à N) pour la roulette")
     @app_commands.describe(max_val="Le chiffre maximum N pour les tirages (ex: 19)")
@@ -127,17 +164,20 @@ class RouletteCog(commands.Cog):
 
         max_roll = Database.get_roulette_max_roll(interaction.guild.id)
         talents = Database.get_all_talents(interaction.guild.id)
+        reroll_role_id = Database.get_reroll_role_id(interaction.guild.id)
+        reroll_role_text = f"<@&{reroll_role_id}>" if reroll_role_id else "*(Aucun - réservé aux administrateurs)*"
 
         if not talents:
             return await interaction.response.send_message(
                 f"ℹ️ Aucun talent n'est actuellement configuré sur ce serveur (Roll max : 0 à {max_roll}).\n"
+                f"• **Rôle Grant Reroll :** {reroll_role_text}\n"
                 f"Utilisez `/setup_talents set_talent` pour ajouter vos talents.",
                 ephemeral=True
             )
 
         embed = discord.Embed(
             title=f"📜 Configuration de la Roulette (0 à {max_roll})",
-            description=f"Total de **{len(talents)}** talent(s) configuré(s) sur ce serveur.",
+            description=f"Total de **{len(talents)}** talent(s) configuré(s) sur ce serveur.\n• **Rôle Grant Reroll :** {reroll_role_text}",
             color=discord.Color.purple()
         )
 
