@@ -206,6 +206,7 @@ class RouletteCog(commands.Cog):
                 ephemeral=True
             )
 
+        await interaction.response.defer()
         max_roll = Database.get_roulette_max_roll(guild_id)
         roll = random.randint(0, max_roll)
 
@@ -248,7 +249,7 @@ class RouletteCog(commands.Cog):
         else:
             embed.description = f"Tu as eu le chiffre **{roll}**.\nAucun talent n'est actuellement associé à ce chiffre."
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="roll_talent", description="Faire tourner la roulette pour obtenir un chiffre et son talent (0 à N)")
     async def roll_talent(self, interaction: discord.Interaction):

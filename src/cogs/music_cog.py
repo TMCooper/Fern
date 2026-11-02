@@ -24,14 +24,13 @@ class MusicCog(commands.Cog):
         vocal_channel = member.voice.channel
         vc = interaction.guild.voice_client
 
-        # Connexion ou déplacement
-        if vc:
-            if vc.channel != vocal_channel:
-                await vc.move_to(vocal_channel)
-        else:
-            vc = await vocal_channel.connect()
-
         try:
+            # Connexion ou déplacement
+            if vc:
+                if vc.channel != vocal_channel:
+                    await vc.move_to(vocal_channel)
+            else:
+                vc = await vocal_channel.connect()
             title, file_path = await Music.download(url)
 
             # Lecture de l'audio

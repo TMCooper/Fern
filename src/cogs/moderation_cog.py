@@ -53,6 +53,7 @@ class ModerationCog(commands.Cog):
             resultats = re.findall(models, message.content)
             
             if resultats:
+                await interaction.response.defer(ephemeral=True)
                 ajouts_reussis = 0
                 
                 # On boucle bêtement sur tous les liens trouvés
@@ -69,11 +70,11 @@ class ModerationCog(commands.Cog):
                 # On supprime le message
                 try:
                     await message.delete()
-                    await interaction.response.send_message(f"Le message a été supprimé. {ajouts_reussis} lien(s) ajouté(s) à la blacklist.", ephemeral=True)
+                    await interaction.followup.send(f"Le message a été supprimé. {ajouts_reussis} lien(s) ajouté(s) à la blacklist.", ephemeral=True)
                 except discord.Forbidden:
-                    await interaction.response.send_message("Les liens ont été bannis, mais je n'ai pas la permission de supprimer le message.", ephemeral=True)
+                    await interaction.followup.send("Les liens ont été bannis, mais je n'ai pas la permission de supprimer le message.", ephemeral=True)
                 except Exception as e:
-                    await interaction.response.send_message(f"Erreur lors de la suppression : {e}", ephemeral=True)
+                    await interaction.followup.send(f"Erreur lors de la suppression : {e}", ephemeral=True)
 
             else:
                 return await interaction.response.send_message("Le message que vous tentez de supprimer ne contient pas de lien.", ephemeral=True)
@@ -85,6 +86,8 @@ class ModerationCog(commands.Cog):
         # Vérification manuelle des permissions
         if not interaction.user.guild_permissions.manage_messages:
             return await interaction.response.send_message("Vous n'avez pas la permission de faire cela.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
 
         hashes_found = []
         for attachment in message.attachments:
@@ -112,13 +115,13 @@ class ModerationCog(commands.Cog):
         try:
             await message.delete()
             if success:
-                await interaction.response.send_message(f"Le message de {message.author.mention} a été supprimé et ajouté à la base de données.", ephemeral=True)
+                await interaction.followup.send(f"Le message de {message.author.mention} a été supprimé et ajouté à la base de données.", ephemeral=True)
             else:
-                await interaction.response.send_message(f"Le message de {message.author.mention} a été supprimé, mais non ajouté à la db : {msg}", ephemeral=True)
+                await interaction.followup.send(f"Le message de {message.author.mention} a été supprimé, mais non ajouté à la db : {msg}", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message(f"Le message a été ajouté (Status: {msg}) mais je n'ai pas la permission de le supprimer.", ephemeral=True)
+            await interaction.followup.send(f"Le message a été ajouté (Status: {msg}) mais je n'ai pas la permission de le supprimer.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"Erreur lors de la suppression : {e}", ephemeral=True)
+            await interaction.followup.send(f"Erreur lors de la suppression : {e}", ephemeral=True)
 
     @app_commands.command(name="ban_texte", description="Ajoute manuellement un texte à la base de données des messages interdits")
     @app_commands.describe(texte="Le texte à bannir")
@@ -238,14 +241,15 @@ class ModerationCog(commands.Cog):
             return await interaction.response.send_message(f"Aucun membre ne possède le rôle {role_cible.name}.", ephemeral=True)
             
         winner = random.choice(members_with_role)
+        await interaction.response.defer()
         
         try:
             await winner.add_roles(role_recompense)
-            await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Il a reçu le rôle {role_recompense.mention}.")
+            await interaction.followup.send(f"Le grand gagnant est {winner.mention} ! Il a reçu le rôle {role_recompense.mention}.")
         except discord.Forbidden:
-            await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Erreur : Je n'ai pas les permissions pour lui donner le rôle {role_recompense.name}.")
+            await interaction.followup.send(f"Le grand gagnant est {winner.mention} ! Erreur : Je n'ai pas les permissions pour lui donner le rôle {role_recompense.name}.")
         except Exception as e:
-            await interaction.response.send_message(f"Le grand gagnant est {winner.mention} ! Erreur lors de l'ajout du rôle : {e}")
+            await interaction.followup.send(f"Le grand gagnant est {winner.mention} ! Erreur lors de l'ajout du rôle : {e}")
 
     @app_commands.command(name="roulette_setup", description="Configure le rôle pour la commande roulette")
     @app_commands.describe(role_cible="Le rôle parmi lequel tirer au sort")
@@ -404,6 +408,7 @@ class ModerationCog(commands.Cog):
         if not ban:
             return await interaction.response.send_message("Aucune information trouvée dans la base de données.", ephemeral=True)
         
+        await interaction.response.defer()
         try:
             user = await self.bot.fetch_user(int(user_id))
             avatar_url = user.display_avatar.url if user.display_avatar else None
@@ -420,7 +425,7 @@ class ModerationCog(commands.Cog):
         embed.add_field(name="Date du ban", value=f"`{ban['banned_at']}`", inline=True)
         embed.add_field(name="Raison spécifiée", value=f"*{ban['reason']}*", inline=False)
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="vestige", description="Consulter l'historique complet des sanctions d'un utilisateur.")
     @app_commands.autocomplete(user_id=ban_autocomplete)

@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
-DEV_ID = int(os.getenv('DEV_ID', 0))
+_raw_dev_id = os.getenv('DEV_ID', '').strip()
+DEV_ID = int(_raw_dev_id) if _raw_dev_id.isdigit() else 0
 
 class LoggingSystemCog(commands.Cog):
     def __init__(self, bot):
@@ -272,7 +273,8 @@ class LoggingSystemCog(commands.Cog):
     @app_commands.command(name="sync_history", description="Synchronise les anciens messages des salons textuels dans la base de données")
     @app_commands.describe(limit="Nombre de messages par salon (laisser vide = tout récupérer)")
     async def sync_history(self, interaction: discord.Interaction, limit: int = None):
-        if interaction.user.id != DEV_ID and not interaction.user.guild_permissions.administrator:
+        is_dev = (DEV_ID != 0 and interaction.user.id == DEV_ID)
+        if not is_dev and not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Vous n'avez pas les permissions nécessaires (Administrateur ou Développeur requis).", 
                 ephemeral=True
@@ -323,9 +325,12 @@ class LoggingSystemCog(commands.Cog):
                 except:
                     pass
                 
-        await interaction.edit_original_response(
-            content=f"✅ Synchronisation terminée ! {channels_done}/{total_channels} salons traités — **{count}** messages analysés/loggés."
-        )
+        try:
+            await interaction.edit_original_response(
+                content=f"✅ Synchronisation terminée ! {channels_done}/{total_channels} salons traités — **{count}** messages analysés/loggés."
+            )
+        except Exception:
+            pass
 
 async def setup(bot):
     await bot.add_cog(LoggingSystemCog(bot))

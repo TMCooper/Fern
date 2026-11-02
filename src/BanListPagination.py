@@ -40,6 +40,15 @@ class BanListPagination(discord.ui.View):
         embed.description = description
         return embed
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
+        if isinstance(error, discord.HTTPException) and error.code in (40060, 10062):
+            return
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Une erreur est survenue : {error}", ephemeral=True)
+        except Exception:
+            pass
+
     @discord.ui.button(label="◀ Précédent", style=discord.ButtonStyle.blurple)
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page -= 1

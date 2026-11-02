@@ -1,5 +1,5 @@
 import os, sqlite3, hashlib, json, re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class Database:
     PATH = os.path.dirname(os.path.abspath(__file__))
@@ -178,6 +178,48 @@ class Database:
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_roulette_guild ON RouletteTalents(guild_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_roulette_hist_guild ON RouletteHistory(guild_id)")
+
+                # --- TABLES SALON (TIRAGE AU SORT) ---
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS SalonSettings (
+                        guild_id TEXT PRIMARY KEY,
+                        mode TEXT NOT NULL,
+                        categories TEXT,
+                        excluded_channels TEXT,
+                        manual_channels TEXT,
+                        last_updated_by_id TEXT,
+                        last_updated_by_name TEXT,
+                        last_updated_at TEXT
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS SalonConfigHistory (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        user_name TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        details TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_salon_hist_guild ON SalonConfigHistory(guild_id)")
+
+                # --- TABLE TRACKING DES COMMANDES ---
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS CommandUsageLogs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT,
+                        channel_id TEXT,
+                        user_id TEXT NOT NULL,
+                        user_name TEXT,
+                        command_name TEXT NOT NULL,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_usage_guild ON CommandUsageLogs(guild_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_usage_name ON CommandUsageLogs(command_name)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_usage_ts ON CommandUsageLogs(timestamp)")
 
                 con.commit() # commit permet de valider nos modifications
                 res = cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Alert'") # Permet de verifier
@@ -811,6 +853,272 @@ class Database:
         except sqlite3.Error as e:
             print(f"Erreur SQLite (get_rolled_members) : {e}")
             return []
+
+    # --- MÉTHODES SALON / TIRAGE AU SORT ---
+    def get_salon_settings(guild_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("SELECT * FROM SalonSettings WHERE guild_id = ?", (str(guild_id),))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                res = dict(row)
+                try:
+                    res['categories'] = json.loads(res.get('categories') or '[]')
+                except Exception:
+                    res['categories'] = []
+                try:
+                    res['excluded_channels'] = json.loads(res.get('excluded_channels') or '[]')
+                except Exception:
+                    res['excluded_channels'] = []
+                try:
+                    res['manual_channels'] = json.loads(res.get('manual_channels') or '[]')
+                except Exception:
+                    res['manual_channels'] = []
+                return res
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_salon_settings) : {e}")
+            return None
+
+    def set_salon_categories(guild_id, categories_list, excluded_channels_list, user_id, user_name, details_text=None):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cat_json = json.dumps([str(c) for c in categories_list])
+        excl_json = json.dumps([str(e) for e in excluded_channels_list])
+        if details_text is None:
+            details_text = f"Mode Catégories : {len(categories_list)} catégorie(s), {len(excluded_channels_list)} salon(s) exclu(s)"
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO SalonSettings (guild_id, mode, categories, excluded_channels, manual_channels, last_updated_by_id, last_updated_by_name, last_updated_at)
+                    VALUES (?, 'CATEGORIES', ?, ?, '[]', ?, ?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        mode = 'CATEGORIES',
+                        categories = excluded.categories,
+                        excluded_channels = excluded.excluded_channels,
+                        manual_channels = '[]',
+                        last_updated_by_id = excluded.last_updated_by_id,
+                        last_updated_by_name = excluded.last_updated_by_name,
+                        last_updated_at = excluded.last_updated_at
+                """, (str(guild_id), cat_json, excl_json, str(user_id), str(user_name), now))
+
+                cur.execute("""
+                    INSERT INTO SalonConfigHistory (guild_id, user_id, user_name, action, details, timestamp)
+                    VALUES (?, ?, ?, 'SETUP_CATEGORIES', ?, ?)
+                """, (str(guild_id), str(user_id), str(user_name), details_text, now))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (set_salon_categories) : {e}")
+            return False
+
+    def set_salon_manual(guild_id, manual_channels_list, user_id, user_name, details_text=None):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        manual_json = json.dumps([str(c) for c in manual_channels_list])
+        if details_text is None:
+            details_text = f"Mode Manuel : {len(manual_channels_list)} salon(s) configuré(s)"
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO SalonSettings (guild_id, mode, categories, excluded_channels, manual_channels, last_updated_by_id, last_updated_by_name, last_updated_at)
+                    VALUES (?, 'MANUAL', '[]', '[]', ?, ?, ?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        mode = 'MANUAL',
+                        categories = '[]',
+                        excluded_channels = '[]',
+                        manual_channels = excluded.manual_channels,
+                        last_updated_by_id = excluded.last_updated_by_id,
+                        last_updated_by_name = excluded.last_updated_by_name,
+                        last_updated_at = excluded.last_updated_at
+                """, (str(guild_id), manual_json, str(user_id), str(user_name), now))
+
+                cur.execute("""
+                    INSERT INTO SalonConfigHistory (guild_id, user_id, user_name, action, details, timestamp)
+                    VALUES (?, ?, ?, 'SETUP_MANUAL', ?, ?)
+                """, (str(guild_id), str(user_id), str(user_name), details_text, now))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (set_salon_manual) : {e}")
+            return False
+
+    def reset_salon_settings(guild_id, user_id, user_name):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("DELETE FROM SalonSettings WHERE guild_id = ?", (str(guild_id),))
+                cur.execute("""
+                    INSERT INTO SalonConfigHistory (guild_id, user_id, user_name, action, details, timestamp)
+                    VALUES (?, ?, ?, 'RESET', 'Réinitialisation de la configuration des salons', ?)
+                """, (str(guild_id), str(user_id), str(user_name), now))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (reset_salon_settings) : {e}")
+            return False
+
+    def get_salon_history(guild_id, limit=5):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                cur.execute("""
+                    SELECT * FROM SalonConfigHistory
+                    WHERE guild_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                """, (str(guild_id), int(limit)))
+                return [dict(row) for row in cur.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_salon_history) : {e}")
+            return []
+
+    # --- MÉTHODES TRACKING / STATISTIQUES DES COMMANDES ---
+    def log_command_usage(guild_id, channel_id, user_id, user_name, command_name):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("""
+                    INSERT INTO CommandUsageLogs (guild_id, channel_id, user_id, user_name, command_name, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    str(guild_id) if guild_id else "DM",
+                    str(channel_id) if channel_id else "0",
+                    str(user_id),
+                    str(user_name or "Inconnu"),
+                    str(command_name),
+                    now
+                ))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (log_command_usage) : {e}")
+            return False
+
+    def get_command_usage_stats(guild_id=None, command_name=None):
+        now = datetime.now()
+        ts_24h = (now - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        ts_7d = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        ts_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+        where_parts = []
+        base_params = []
+        if guild_id:
+            where_parts.append("guild_id = ?")
+            base_params.append(str(guild_id))
+
+        where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+
+                # 1. Classement et fréquences de toutes les commandes
+                cur.execute(f"""
+                    SELECT
+                        command_name,
+                        COUNT(*) as total,
+                        SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) as count_24h,
+                        SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) as count_7d,
+                        SUM(CASE WHEN timestamp >= ? THEN 1 ELSE 0 END) as count_30d,
+                        MIN(timestamp) as first_used,
+                        MAX(timestamp) as last_used
+                    FROM CommandUsageLogs
+                    {where_clause}
+                    GROUP BY command_name
+                    ORDER BY total DESC
+                """, [ts_24h, ts_7d, ts_30d] + base_params)
+
+                cmd_rows = [dict(r) for r in cur.fetchall()]
+                total_uses = sum(r["total"] for r in cmd_rows)
+                uses_24h = sum(r["count_24h"] or 0 for r in cmd_rows)
+                uses_7d = sum(r["count_7d"] or 0 for r in cmd_rows)
+                uses_30d = sum(r["count_30d"] or 0 for r in cmd_rows)
+
+                first_used_all = min((r["first_used"] for r in cmd_rows if r.get("first_used")), default=None)
+                last_used_all = max((r["last_used"] for r in cmd_rows if r.get("last_used")), default=None)
+
+                active_days = 1.0
+                if first_used_all:
+                    try:
+                        dt_first = datetime.strptime(first_used_all, "%Y-%m-%d %H:%M:%S")
+                        active_days = max(1.0, (now - dt_first).total_seconds() / 86400.0)
+                    except Exception:
+                        active_days = 1.0
+
+                for idx, r in enumerate(cmd_rows):
+                    r["rank"] = idx + 1
+                    r["count_24h"] = r["count_24h"] or 0
+                    r["count_7d"] = r["count_7d"] or 0
+                    r["count_30d"] = r["count_30d"] or 0
+                    r["percentage"] = round((r["total"] / total_uses) * 100, 1) if total_uses > 0 else 0.0
+                    r["avg_per_day"] = round(r["total"] / active_days, 2)
+
+                # Clause additionnelle si on filtre sur une commande spécifique
+                cmd_where_parts = list(where_parts)
+                cmd_params = list(base_params)
+                if command_name:
+                    cmd_where_parts.append("LOWER(command_name) = LOWER(?)")
+                    cmd_params.append(str(command_name).lstrip("/").strip())
+                cmd_where_clause = ("WHERE " + " AND ".join(cmd_where_parts)) if cmd_where_parts else ""
+
+                # 2. Heure de pointe (Peak Hour)
+                cur.execute(f"""
+                    SELECT substr(timestamp, 12, 2) as hour, COUNT(*) as cnt
+                    FROM CommandUsageLogs
+                    {cmd_where_clause}
+                    GROUP BY hour
+                    ORDER BY cnt DESC
+                    LIMIT 1
+                """, cmd_params)
+                peak_row = cur.fetchone()
+                peak_hour = f"{peak_row['hour']}h00 - {int(peak_row['hour']) + 1:02d}h00 ({peak_row['cnt']} exéc.)" if peak_row and peak_row["hour"] else "N/A"
+
+                # 3. Top 5 utilisateurs
+                cur.execute(f"""
+                    SELECT user_id, MAX(user_name) as user_name, COUNT(*) as total
+                    FROM CommandUsageLogs
+                    {cmd_where_clause}
+                    GROUP BY user_id
+                    ORDER BY total DESC
+                    LIMIT 5
+                """, cmd_params)
+                top_users = [dict(r) for r in cur.fetchall()]
+
+                # 4. 5 dernières exécutions
+                cur.execute(f"""
+                    SELECT guild_id, channel_id, user_id, user_name, command_name, timestamp
+                    FROM CommandUsageLogs
+                    {cmd_where_clause}
+                    ORDER BY id DESC
+                    LIMIT 5
+                """, cmd_params)
+                recent_logs = [dict(r) for r in cur.fetchall()]
+
+                return {
+                    "total_uses": total_uses,
+                    "uses_24h": uses_24h,
+                    "uses_7d": uses_7d,
+                    "uses_30d": uses_30d,
+                    "first_used": first_used_all,
+                    "last_used": last_used_all,
+                    "active_days": round(active_days, 1),
+                    "avg_per_day": round(total_uses / active_days, 2) if total_uses > 0 else 0.0,
+                    "avg_per_hour_24h": round(uses_24h / 24.0, 2),
+                    "peak_hour": peak_hour,
+                    "commands": cmd_rows,
+                    "top_users": top_users,
+                    "recent_logs": recent_logs
+                }
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_command_usage_stats) : {e}")
+            return None
 
 class Utils:
     async def get_image_hash(attachment):
