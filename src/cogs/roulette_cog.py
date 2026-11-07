@@ -86,6 +86,33 @@ class RouletteCog(commands.Cog):
             else:
                 await interaction.response.send_message("❌ Erreur lors de la réinitialisation du rôle reroll.", ephemeral=True)
 
+    @setup_group.command(name="set_bonus_role", description="Définit un rôle optionnel ajouté en prime à toute personne utilisant /roll_talent")
+    @app_commands.describe(role="Le rôle bonus/décoratif à attribuer (laisser vide pour désactiver)")
+    async def setup_set_bonus_role(self, interaction: discord.Interaction, role: discord.Role = None):
+        if not interaction.guild:
+            return await interaction.response.send_message("❌ Cette commande doit être exécutée dans un serveur.", ephemeral=True)
+        if not interaction.user.guild_permissions.administrator and not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ Vous n'avez pas la permission de configurer la roulette.", ephemeral=True)
+
+        if role:
+            success = Database.set_bonus_role_id(interaction.guild.id, role.id)
+            if success:
+                await interaction.response.send_message(
+                    f"✅ Le rôle additionnel {role.mention} sera désormais attribué automatiquement en prime à toute personne utilisant `/roll_talent`.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Erreur lors de l'enregistrement du rôle additionnel.", ephemeral=True)
+        else:
+            success = Database.set_bonus_role_id(interaction.guild.id, None)
+            if success:
+                await interaction.response.send_message(
+                    "🔄 Le rôle additionnel de `/roll_talent` a été désactivé (le reste de la configuration est conservé).",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Erreur lors de la réinitialisation du rôle additionnel.", ephemeral=True)
+
     @setup_group.command(name="set_max", description="Définit le chiffre maximum (roll de 0 à N) pour la roulette")
     @app_commands.describe(max_val="Le chiffre maximum N pour les tirages (ex: 19)")
     async def setup_set_max(self, interaction: discord.Interaction, max_val: int):
@@ -166,18 +193,25 @@ class RouletteCog(commands.Cog):
         talents = Database.get_all_talents(interaction.guild.id)
         reroll_role_id = Database.get_reroll_role_id(interaction.guild.id)
         reroll_role_text = f"<@&{reroll_role_id}>" if reroll_role_id else "*(Aucun - réservé aux administrateurs)*"
+        bonus_role_id = Database.get_bonus_role_id(interaction.guild.id)
+        bonus_role_text = f"<@&{bonus_role_id}>" if bonus_role_id else "*(Aucun)*"
 
         if not talents:
             return await interaction.response.send_message(
                 f"ℹ️ Aucun talent n'est actuellement configuré sur ce serveur (Roll max : 0 à {max_roll}).\n"
                 f"• **Rôle Grant Reroll :** {reroll_role_text}\n"
+                f"• **Rôle additionnel (Bonus/Décoratif) :** {bonus_role_text}\n"
                 f"Utilisez `/setup_talents set_talent` pour ajouter vos talents.",
                 ephemeral=True
             )
 
         embed = discord.Embed(
             title=f"📜 Configuration de la Roulette (0 à {max_roll})",
-            description=f"Total de **{len(talents)}** talent(s) configuré(s) sur ce serveur.\n• **Rôle Grant Reroll :** {reroll_role_text}",
+            description=(
+                f"Total de **{len(talents)}** talent(s) configuré(s) sur ce serveur.\n"
+                f"• **Rôle Grant Reroll :** {reroll_role_text}\n"
+                f"• **Rôle additionnel (Bonus/Décoratif) :** {bonus_role_text}"
+            ),
             color=discord.Color.purple()
         )
 
@@ -225,6 +259,16 @@ class RouletteCog(commands.Cog):
             color=discord.Color.gold()
         )
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
+
+        # Attribution du rôle additionnel / décoratif optionnel à toute personne utilisant la commande
+        bonus_role_id = Database.get_bonus_role_id(guild_id)
+        if bonus_role_id:
+            try:
+                bonus_role = interaction.guild.get_role(int(bonus_role_id))
+                if bonus_role and bonus_role not in interaction.user.roles:
+                    await interaction.user.add_roles(bonus_role, reason="Rôle additionnel /roll_talent")
+            except Exception as e:
+                print(f"Erreur lors de l'attribution du rôle additionnel (/roll_talent) : {e}")
 
         if talent:
             role_note = ""

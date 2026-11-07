@@ -148,11 +148,16 @@ class Database:
                         guild_id TEXT PRIMARY KEY,
                         max_roll INTEGER DEFAULT 19,
                         reroll_role_id TEXT,
+                        bonus_role_id TEXT,
                         updated_at TEXT NOT NULL
                     )
                 """)
                 try:
                     cur.execute("ALTER TABLE RouletteSettings ADD COLUMN reroll_role_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE RouletteSettings ADD COLUMN bonus_role_id TEXT")
                 except sqlite3.OperationalError:
                     pass
                 cur.execute("""
@@ -713,6 +718,35 @@ class Database:
                 return True
         except sqlite3.Error as e:
             print(f"Erreur SQLite (set_reroll_role_id) : {e}")
+            return False
+
+    def get_bonus_role_id(guild_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                cur.execute("SELECT bonus_role_id FROM RouletteSettings WHERE guild_id = ?", (str(guild_id),))
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (get_bonus_role_id) : {e}")
+            return None
+
+    def set_bonus_role_id(guild_id, role_id):
+        try:
+            with sqlite3.connect(Database.PATH_DB) as con:
+                cur = con.cursor()
+                role_id_str = str(role_id) if role_id is not None else None
+                cur.execute("""
+                    INSERT INTO RouletteSettings (guild_id, max_roll, bonus_role_id, updated_at)
+                    VALUES (?, 19, ?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        bonus_role_id = excluded.bonus_role_id,
+                        updated_at = excluded.updated_at
+                """, (str(guild_id), role_id_str, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                con.commit()
+                return True
+        except sqlite3.Error as e:
+            print(f"Erreur SQLite (set_bonus_role_id) : {e}")
             return False
 
     def get_talent(guild_id, number):
